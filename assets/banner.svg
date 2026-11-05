@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="PHP Fossil">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0b1020"/><stop offset="1" stop-color="#121a2e"/></linearGradient>
+    <linearGradient id="ac" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#2e8b57"/><stop offset="1" stop-color="#daa520"/></linearGradient>
+    <filter id="blur" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="46"/></filter>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#fff" stroke-opacity=".05"/></pattern>
+    <clipPath id="r"><rect width="1200" height="320" rx="24"/></clipPath>
+  </defs>
+  <style>
+    .b1{animation:f1 9s ease-in-out infinite alternate}
+    .b2{animation:f2 11s ease-in-out infinite alternate}
+    .sp{animation:tw 2.4s ease-in-out infinite}
+    .sp2{animation:tw 3.1s .8s ease-in-out infinite}
+    .em{animation:bob 3.2s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+    .t{animation:up .9s cubic-bezier(.2,.8,.2,1) both}
+    .s{animation:up .9s .25s cubic-bezier(.2,.8,.2,1) both}
+    .ln{stroke-dasharray:540;stroke-dashoffset:540;animation:draw 1.4s .35s ease forwards}
+    @keyframes f1{to{transform:translate(170px,60px)}}
+    @keyframes f2{to{transform:translate(-190px,-50px)}}
+    @keyframes tw{50%{opacity:.15}}
+    @keyframes bob{50%{transform:translateY(-8px) rotate(-6deg)}}
+    @keyframes up{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+    @keyframes draw{to{stroke-dashoffset:0}}
+    @media (prefers-reduced-motion:reduce){*{animation:none!important}.ln{stroke-dashoffset:0}}
+  </style>
+  <g clip-path="url(#r)">
+    <rect width="1200" height="320" fill="url(#bg)"/>
+    <circle class="b1" cx="210" cy="70" r="170" fill="#2e8b57" opacity=".55" filter="url(#blur)"/>
+    <circle class="b2" cx="1010" cy="270" r="190" fill="#daa520" opacity=".5" filter="url(#blur)"/>
+    <rect width="1200" height="320" fill="url(#grid)"/>
+    <g fill="#fff"><circle class="sp" cx="140" cy="250" r="2"/><circle class="sp2" cx="1060" cy="60" r="2.5"/><circle class="sp" cx="930" cy="120" r="1.6"/><circle class="sp2" cx="300" cy="40" r="1.8"/></g>
+  </g>
+  <text class="em" x="600" y="96" text-anchor="middle" font-size="54">🦕</text>
+  <text class="t" x="600" y="178" text-anchor="middle" font-family="'Segoe UI',Inter,Helvetica,Arial,sans-serif" font-size="68" font-weight="800" fill="#fff" letter-spacing="-1">PHP Fossil</text>
+  <path class="ln" d="M330 202H870" stroke="url(#ac)" stroke-width="4" stroke-linecap="round"/>
+  <text class="s" x="600" y="246" text-anchor="middle" font-family="'Segoe UI',Inter,Helvetica,Arial,sans-serif" font-size="22" fill="#cbd5e1">Discovers legacy PHP sites via search dorks, fingerprints old versions, maps vulns, …</text>
+</svg>

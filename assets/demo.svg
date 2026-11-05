@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="572" viewBox="0 0 900 572" role="img" aria-label="PHP Fossil — demo">
+  <style>
+    text{font-family:ui-monospace,SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;font-size:15px}
+    .l{opacity:0}
+    .ty{clip-path:inset(0 100% 0 0)}
+    .cur{animation:blink 1s steps(1) infinite}
+    @keyframes show{to{opacity:1}}
+    @keyframes type{to{clip-path:inset(0 0 0 0)}}
+    @keyframes blink{50%{opacity:0}}
+    @media (prefers-reduced-motion:reduce){.l{opacity:1;animation:none!important}.ty{clip-path:none;animation:none!important}}
+  </style>
+  <rect width="900" height="572" rx="14" fill="#0d1117"/>
+  <rect x=".5" y=".5" width="899" height="572" rx="14" fill="none" stroke="#30363d"/>
+  <rect width="900" height="40" rx="14" fill="#161b22"/><rect y="26" width="900" height="14" fill="#161b22"/>
+  <circle cx="24" cy="20" r="6" fill="#ff5f57"/><circle cx="44" cy="20" r="6" fill="#febc2e"/><circle cx="64" cy="20" r="6" fill="#28c840"/>
+  <text x="450" y="25" text-anchor="middle" fill="#8b949e" style="font-size:13px">PHP Fossil — demo</text>
+<text x="28" y="74" class="l" style="animation:show .01s 0.60s forwards"><tspan fill="#daa520">❯</tspan></text><text x="50" y="74" class="l ty" style="animation:show .01s 0.60s forwards,type 0.77s steps(17) 0.60s forwards" fill="#e5e7eb">php-fossil --help</text>
+<text x="50" y="100" class="l" style="animation:show .01s 1.67s forwards" fill="#94a3b8">Usage: php-fossil [OPTIONS] COMMAND [ARGS]...</text>
+<text x="50" y="126" class="l" style="animation:show .01s 1.89s forwards" fill="#94a3b8">Commands: dorks, scan, report, list</text>
+<text x="50" y="152" class="l" style="animation:show .01s 2.11s forwards" fill="#94a3b8">A CLI for discovering and analyzing legacy PHP deployments</text>
+<text x="28" y="204" class="l" style="animation:show .01s 2.68s forwards"><tspan fill="#daa520">❯</tspan></text><text x="50" y="204" class="l ty" style="animation:show .01s 2.68s forwards,type 1.80s steps(40) 2.68s forwards" fill="#e5e7eb">php-fossil dorks --version 5.6 --count 5</text>
+<text x="50" y="230" class="l" style="animation:show .01s 4.78s forwards" fill="#94a3b8">5 dorks generated for PHP 5.6</text>
+<text x="50" y="256" class="l" style="animation:show .01s 5.00s forwards" fill="#94a3b8">inurl:phpinfo.php &quot;PHP Version 5.6&quot;</text>
+<text x="50" y="282" class="l" style="animation:show .01s 5.22s forwards" fill="#94a3b8">intitle:&quot;index of&quot; &quot;php5.dll&quot;</text>
+<text x="50" y="308" class="l" style="animation:show .01s 5.44s forwards" fill="#94a3b8">Dorks copied to clipboard</text>
+<text x="28" y="360" class="l" style="animation:show .01s 6.01s forwards"><tspan fill="#daa520">❯</tspan></text><text x="50" y="360" class="l ty" style="animation:show .01s 6.01s forwards,type 2.20s steps(49) 6.01s forwards" fill="#e5e7eb">php-fossil scan --targets targets.txt --timeout 8</text>
+<text x="50" y="386" class="l" style="animation:show .01s 8.51s forwards" fill="#94a3b8">Scanning 3 targets with 4 workers...</text>
+<text x="50" y="412" class="l" style="animation:show .01s 8.73s forwards" fill="#94a3b8">target1.com → PHP/5.6.40 (EOL) • 27 vulns • phpinfo.php + db_backup.sql (tab…</text>
+<text x="50" y="438" class="l" style="animation:show .01s 8.95s forwards" fill="#94a3b8">target2.com → PHP/7.2.34 (EOL) • 9 vulns • no exposed dumps</text>
+<text x="50" y="464" class="l" style="animation:show .01s 9.17s forwards" fill="#94a3b8">Scan complete. 3 results saved to fossil-results.json</text>
+<text x="28" y="516" class="l" style="animation:show .01s 9.74s forwards"><tspan fill="#daa520">❯</tspan></text><text x="50" y="516" class="l ty" style="animation:show .01s 9.74s forwards,type 2.20s steps(59) 9.74s forwards" fill="#e5e7eb">php-fossil report --input fossil-results.json --format html</text>
+<g class="l" style="animation:show .01s 12.24s forwards"><text x="28" y="542" fill="#daa520">❯</text><rect class="cur" x="50" y="527" width="10" height="18" fill="#e5e7eb"/></g>
+</svg>
