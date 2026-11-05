@@ -113,15 +113,24 @@ def detect_from_error_page(content: str) -> Optional[str]:
     if not content or not isinstance(content, str):
         return None
 
+    # Primary pattern: "PHP Version: X.Y.Z"
     match = re.search(
         r"(?i)PHP Version[:\s]+([0-9]+\.[0-9]+\.[0-9]+)", content
     )
     if match:
         return match.group(1)
 
-    # Common pattern in default Apache/PHP error output
+    # Common pattern in default Apache/PHP error output: "PHP/7.3.12"
     match = re.search(
         r"PHP/([0-9]+\.[0-9]+\.[0-9]+)", content, re.IGNORECASE
+    )
+    if match:
+        return match.group(1)
+
+    # Additional pattern often seen in parse error messages:
+    # "... (PHP 7.3.12)" – capture the version inside parentheses.
+    match = re.search(
+        r"\(PHP\s+([0-9]+\.[0-9]+\.[0-9]+)\)", content, re.IGNORECASE
     )
     if match:
         return match.group(1)
