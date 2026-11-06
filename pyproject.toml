@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Discovers legacy PHP sites via search dorks, fingerprints old versions, maps vulns, extracts schemas and builds prioritized security lists."
 readme = "README.md"
 requires-python = ">=3.11"
-license = {expression = "MIT"}
+license = {text = "MIT"}
 authors = [
     {name = "PHP Fossil Contributors"},
 ]
