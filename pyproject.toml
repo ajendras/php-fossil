@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Discovers legacy PHP sites via search dorks, fingerprints old versions, maps vulns, extracts schemas and builds prioritized security lists."
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "PHP Fossil Contributors"},
 ]
@@ -18,6 +18,7 @@ classifiers = [
     "Intended Audience :: Information Technology",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Security",
     "Topic :: Internet :: WWW/HTTP",
 ]
@@ -29,6 +30,13 @@ dependencies = [
     "pydantic>=2.4.0",
     "beautifulsoup4>=4.12.0",
     "jinja2>=3.1.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-httpx>=0.30.0",
 ]
 
 [project.scripts]

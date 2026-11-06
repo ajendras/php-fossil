@@ -229,7 +229,10 @@ tests/
 
 ## 🧪 Testing
 
+First install with test dependencies:
+
 ```bash
+pip install -e ".[dev]"
 pytest
 ```
 
