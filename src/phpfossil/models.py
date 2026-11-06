@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Vulnerability(BaseModel):
@@ -53,6 +53,8 @@ class SchemaResult(BaseModel):
 
 class ScanResult(BaseModel):
     """Result of scanning one target."""
+
+    model_config = ConfigDict(protected_namespaces=())
 
     url: str = Field(..., description="The scanned URL")
     php_version: Optional[str] = Field(

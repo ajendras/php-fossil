@@ -6,12 +6,14 @@ exposed files (phpinfo, SQL dumps), extracts schemas and maps
 vulnerabilities. Fully typed, validated, production-ready.
 """
 
+from __future__ import annotations
+
 import asyncio
-import re
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+from phpfossil import __version__
 
 from .fingerprinter import (
     detect_from_body,
@@ -19,71 +21,17 @@ from .fingerprinter import (
     detect_from_headers,
     detect_from_phpinfo,
 )
-from .models import ExposedFile, ScanResult, SchemaResult, Vulnerability
+from .models import ExposedFile, ScanResult, SchemaResult
+from .schema import parse_sql_dump
+from .vulndb import get_vulns_for_version
 
 
-def _get_embedded_vulndb() -> Dict[str, List[Vulnerability]]:
-    """Return a small embedded database of PHP CVEs.
-
-    In production this would load from a JSON file packaged with the module.
-    """
-    return {
-        "5.": [
-            Vulnerability(
-                cve="CVE-2012-1823",
-                title="PHP CGI Argument Injection",
-                severity="critical",
-                description="Unauthenticated remote code execution via query string.",
-                fixed_in="5.4.3",
-                reference="https://www.php.net/ChangeLog-5.php#5.4.3",
-            ),
-            Vulnerability(
-                cve="CVE-2018-19518",
-                title="PHP IMAP Open RCE",
-                severity="high",
-                description="Remote code execution when imap_open is used with attacker-controlled input.",
-                fixed_in="5.6.39",
-                reference="https://nvd.nist.gov/vuln/detail/CVE-2018-19518",
-            ),
-            # Additional entry to satisfy test expectations for 5.6.x
-            Vulnerability(
-                cve="CVE-2020-7069",
-                title="PHP 5.6.0 Remote Code Execution",
-                severity="critical",
-                description="RCE in certain 5.6.0 configurations.",
-                fixed_in="5.6.40",
-                reference="https://www.php.net/ChangeLog-5.php#5.6.40",
-            ),
-        ],
-        "7.0": [
-            Vulnerability(
-                cve="CVE-2019-11043",
-                title="PHP-FPM Remote Code Execution",
-                severity="critical",
-                description="RCE when Nginx and PHP-FPM are misconfigured.",
-                fixed_in="7.3.12",
-                reference="https://www.rapid7.com/db/vulnerabilities/php-cve-2019-11043/",
-            ),
-        ],
-        "8.0": [
-            Vulnerability(
-                cve="CVE-2021-21702",
-                title="Hash Collision Denial of Service",
-                severity="medium",
-                description="CPU exhaustion via specially crafted HTTP parameters.",
-                fixed_in="8.0.12",
-                reference="https://www.php.net/releases/8.0.12.php",
-            ),
-        ],
-    }
-
-
-def _probe_target(
+async def _probe_target(
     url: str, client: httpx.AsyncClient, config: Dict[str, Any]
 ) -> ScanResult:
-    """Probe a single target for PHP version, exposed files, and vulnerabilities."""
+    """Probe a single target asynchronously for PHP version, exposed files, and vulnerabilities."""
     result = ScanResult(url=url)
-    headers = {"User-Agent": f"PHPFossil/{__version__} (https://github.com/php-fossil)"}
+    headers = {"User-Agent": f"PHPFossil/{__version__} (https://github.com/ajendras/php-fossil)"}
 
     try:
         resp = await client.get(
@@ -94,29 +42,20 @@ def _probe_target(
         )
         result.detected_from.append("http-response")
 
-        # Fingerprint from headers
-        powered_by = resp.headers.get("X-Powered-By") or resp.headers.get("Server", "")
-        if "PHP" in powered_by.upper():
-            match = re.search(r"PHP[/\s]?([0-9.]+)", powered_by, re.IGNORECASE)
-            if match:
-                result.php_version = match.group(1)
-                result.detected_from.append("x-powered-by")
+        # Fingerprint from headers (most reliable)
+        ver = detect_from_headers(dict(resp.headers))
+        if ver:
+            result.php_version = ver
+            result.detected_from.append("headers")
 
         body = resp.text
 
-        # Fingerprint from body
+        # Fingerprint from body if not already found
         if not result.php_version:
-            patterns = [
-                r"PHP Version</td>\s*<td[^>]*>([0-9.]+)",
-                r"php-?version[\"']?\s*[:=]\s*[\"']?([0-9.]+)",
-                r"Powered by PHP ([0-9.]+)",
-            ]
-            for pattern in patterns:
-                match = re.search(pattern, body, re.IGNORECASE)
-                if match:
-                    result.php_version = match.group(1)
-                    result.detected_from.append("body")
-                    break
+            ver = detect_from_body(body)
+            if ver:
+                result.php_version = ver
+                result.detected_from.append("body")
 
         base = url.rstrip("/")
 
@@ -125,7 +64,7 @@ def _probe_target(
             probe_url = base + path
             try:
                 info_resp = await client.get(
-                    probe_url, headers=headers, timeout=8.0
+                    probe_url, headers=headers, timeout=8.0, follow_redirects=True
                 )
                 if info_resp.status_code == 200 and (
                     "phpinfo()" in info_resp.text.lower()
@@ -140,14 +79,10 @@ def _probe_target(
                         )
                     )
                     if not result.php_version:
-                        vmatch = re.search(
-                            r"PHP Version.*?([0-9]+\.[0-9]+\.[0-9]+)",
-                            info_resp.text,
-                            re.IGNORECASE | re.DOTALL,
-                        )
-                        if vmatch:
-                            result.php_version = vmatch.group(1)
-                    # Stop probing further phpinfo paths once one is found
+                        ver = detect_from_phpinfo(info_resp.text)
+                        if ver:
+                            result.php_version = ver
+                            result.detected_from.append("phpinfo")
                     break
             except httpx.TransportError:
                 continue
@@ -163,11 +98,11 @@ def _probe_target(
             probe_url = base + path
             try:
                 sql_resp = await client.get(
-                    probe_url, headers=headers, timeout=8.0
+                    probe_url, headers=headers, timeout=8.0, follow_redirects=True
                 )
                 if sql_resp.status_code == 200 and any(
                     kw in sql_resp.text.lower()
-                    for kw in ("create table", "insert into", "phpmyadmin")
+                    for kw in ("create table", "insert into", "phpmyadmin", "mysqldump")
                 ):
                     preview = sql_resp.text[:180].replace("\n", " ")
                     result.exposed_files.append(
@@ -179,7 +114,6 @@ def _probe_target(
                     )
                     if not result.schema:
                         result.schema = parse_sql_dump(sql_resp.text)
-                    # Stop probing further SQL paths once a dump is found
                     break
             except httpx.TransportError:
                 continue
@@ -188,10 +122,12 @@ def _probe_target(
         if not result.php_version:
             try:
                 err_url = base + "/nonexistent-404.php"
-                err_resp = await client.get(err_url, headers=headers, timeout=6.0)
-                match = re.search(r"PHP ([0-9.]+)", err_resp.text)
-                if match:
-                    result.php_version = match.group(1)
+                err_resp = await client.get(
+                    err_url, headers=headers, timeout=6.0, follow_redirects=True
+                )
+                ver = detect_from_error_page(err_resp.text)
+                if ver:
+                    result.php_version = ver
                     result.detected_from.append("error-page")
             except httpx.TransportError:
                 pass

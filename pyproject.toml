@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Discovers legacy PHP sites via search dorks, fingerprints old versions, maps vulns, extracts schemas and builds prioritized security lists."
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = {expression = "MIT"}
 authors = [
     {name = "PHP Fossil Contributors"},
 ]
@@ -16,7 +16,6 @@ keywords = ["php", "security", "vulnerability-scanner", "fingerprinting", "pente
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Information Technology",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Topic :: Security",
@@ -46,6 +45,4 @@ phpfossil = ["*.json"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-q --tb=no"
-
-[project.optional-dependencies]
-dev = ["pytest>=7.4.0", "pytest-httpx", "pytest-asyncio", "ruff", "mypy"]
+asyncio_default_fixture_loop_scope = "function"
