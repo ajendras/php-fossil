@@ -83,7 +83,7 @@ def test_parse_sql_dump() -> None:
 CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255));
 INSERT INTO users VALUES (1, 'test');
 CREATE TABLE posts (`id` INT, title TEXT);
-INSERT INTO posts VALUES (1, 'hello'), (2, 'world');
+INSERT INTO posts VALUES (1, 'hello', 1), (2, 'world', 2);
     """
     schema = parse_sql_dump(sql)
     assert schema.tables == ["users", "posts"]

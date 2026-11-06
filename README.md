@@ -72,6 +72,10 @@ Concurrent, rate-limited scans with `scan_targets()` and configurable limits
 🧩 <b>Extensible Core</b><br>
 Clean module API for new fingerprint methods or data sources
 </td>
+<td>
+🔀 <b>Proxy Rotation</b><br>
+Optional proxy list for rotating outbound requests, supporting residential proxies
+</td>
 </tr>
 </table>
 
@@ -177,8 +181,9 @@ print(version)  # 7.4.33
 |-------------------|---------|--------------------------------------------------|
 | max_concurrency   | 20      | Maximum simultaneous HTTP requests (capped at 50) |
 | timeout           | 12      | HTTP request timeout in seconds                  |
+| proxies           | []      | Optional list of proxy URLs for rotating requests |
 
-These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency` and `--timeout`.
+These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency` and `--timeout`. Proxy rotation is currently only available through the library API; future CLI enhancements will expose it.
 
 ## 🧩 Architecture
 
@@ -205,8 +210,8 @@ src/phpfossil/
 ├── __init__.py          # Public API, models, scan_targets, generate_dorks, generate_report
 ├── cli.py               # Typer commands: scan, dorks, report, list
 ├── models.py            # Pydantic models (ScanResult, Vulnerability, SchemaResult, ExposedFile)
-├── scanner.py           # Async scanning, _probe_target, rate limiting
-├── fingerprinter.py     # detect_from_headers, detect_from_body, detect_from_phpinfo, detect_php_version
+├── scanner.py           # Async scanning, _probe_target, rate limiting, proxy rotation
+├── fingerprinter.py     # detect_from_headers, detect_from_body, detect_from_phpinfo, detect_from_error_page
 ├── vulndb.py            # _get_embedded_vulndb, get_vulns_for_version
 ├── schema.py            # parse_sql_dump, locate_sql_urls
 ├── search.py            # DorkGenerator with 18 templates
@@ -234,7 +239,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 
 <!-- roadmap:start -->
 - [x] **v0.1.0** — first release: Dork Generator, Version Fingerprint, Vuln Database, Schema Extractor
-- [ ] Add proxy rotation and residential proxy support
+- [x] Add proxy rotation and residential proxy support
 - [ ] Persistent SQLite store for historical scan results
 - [ ] WordPress/Joomla/Laravel specific version fingerprinting
 - [ ] Integration with Nuclei for deeper exploit validation
