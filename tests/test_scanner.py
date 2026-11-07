@@ -7,6 +7,7 @@ Uses pytest, pytest-httpx and pytest-asyncio.
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict
 
 import httpx
@@ -24,6 +25,7 @@ from phpfossil.fingerprinter import (
 from phpfossil.models import ScanResult, SchemaResult, Vulnerability
 from phpfossil.scanner import scan_targets
 from phpfossil.schema import parse_sql_dump
+from phpfossil.store import Store, get_historical_results, store_results
 from phpfossil.vulndb import get_vulns_for_version, load
 
 
@@ -151,3 +153,30 @@ async def test_scan_targets_with_mock(httpx_mock: HTTPXMock) -> None:
     if r.schema:
         assert len(r.schema.tables) > 0
     assert len(r.vulns) > 0
+
+
+def test_persistent_store(tmp_path: Path) -> None:
+    """Test SQLite persistence of scan results (new persistent store)."""
+    db_path = tmp_path / "test_history.db"
+
+    result = ScanResult(
+        url="https://legacy.example.com",
+        php_version="7.4.33",
+        detected_from=["headers", "body"],
+    )
+
+    stored_ids = store_results([result], db_path=db_path)
+    assert len(stored_ids) == 1
+
+    history = get_historical_results(limit=10, db_path=db_path)
+    assert len(history) == 1
+    assert history[0].url == "https://legacy.example.com"
+    assert history[0].php_version == "7.4.33"
+    assert "headers" in history[0].detected_from
+
+    store = Store(db_path)
+    assert store.count() == 1
+
+    # test URL filtering
+    filtered = get_historical_results(limit=10, db_path=db_path, url_filter="legacy")
+    assert len(filtered) == 1

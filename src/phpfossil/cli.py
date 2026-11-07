@@ -13,8 +13,10 @@ from phpfossil import (
     __version__,
     generate_dorks,
     generate_report,
+    get_historical_results,
     scan_targets,
     ScanResult,
+    store_results,
 )
 
 app = typer.Typer(
@@ -97,6 +99,10 @@ def scan(
     output.write_text(json.dumps(json_data, indent=2, default=str), encoding="utf-8")
     console.print(f"[green]JSON results saved to {output}[/]")
 
+    # Persist to SQLite history store (automatic)
+    store_results(results)
+    console.print("[green]Scan history persisted to SQLite (~/.phpfossil/history.db)[/]")
+
     # Terminal summary
     generate_report(results, output_format="terminal")
 
@@ -122,6 +128,35 @@ def report(
     generate_report(results, output_format="terminal")
     if html:
         generate_report(results, output_format="html", output_path=html)
+
+
+@app.command("history")
+def cmd_history(
+    limit: Annotated[int, typer.Option("--limit", "-l", min=1, max=500)] = 30,
+    url: Annotated[
+        Optional[str],
+        typer.Option("--url", "-u", help="Filter by URL substring"),
+    ] = None,
+    db_file: Annotated[
+        Optional[Path],
+        typer.Option("--db", help="Custom path to history database"),
+    ] = None,
+) -> None:
+    """Display historical scan results from the persistent SQLite store."""
+    try:
+        results = get_historical_results(
+            limit=limit, db_path=db_file, url_filter=url
+        )
+        if not results:
+            console.print("[yellow]No historical scan results found.[/]")
+            console.print("Run a scan first with: [bold]php-fossil scan ...[/]")
+            return
+
+        console.print(f"[bold green]Showing {len(results)} historical scan(s):[/]\n")
+        generate_report(results, output_format="terminal")
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error accessing history: {exc}[/]")
+        raise typer.Exit(1) from exc
 
 
 @app.command("list")

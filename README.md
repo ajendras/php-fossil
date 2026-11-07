@@ -79,6 +79,8 @@ Optional proxy list for rotating outbound requests, supporting residential proxi
 </tr>
 </table>
 
+**Persistent History** — Every scan is automatically saved to a local SQLite database (`~/.phpfossil/history.db`). Review and query past results with the `history` CLI command or `get_historical_results()`.
+
 ## 📦 Installation
 
 Requires **Python 3.11+**. All dependencies are declared in `pyproject.toml`.
@@ -100,15 +102,21 @@ The CLI is automatically installed as the `php-fossil` command.
 ## ⚡ Quick start
 
 ```python
-from phpfossil import scan_targets, generate_report
+from phpfossil import scan_targets, generate_report, store_results, get_historical_results
 
 results = scan_targets(
     ["https://httpbin.org", "http://example.com"],
     config={"max_concurrency": 10, "timeout": 15}
 )
 
+# results are automatically persisted to SQLite
+store_results(results)
+
 generate_report(results, output_format="terminal")
 generate_report(results, output_format="html", output_path="report.html")
+
+# retrieve historical scans
+history = get_historical_results(limit=5)
 ```
 
 ## 🧰 Usage
@@ -123,6 +131,14 @@ php-fossil dorks --version 7.4 --count 20 --save dorks.txt
 
 ```bash
 php-fossil scan -f targets.txt --concurrency 25 --timeout 10 --html report.html
+```
+
+**View historical scans from the persistent store:**
+
+```bash
+php-fossil history --limit 20
+php-fossil history --url example.com
+php-fossil history --db /path/to/custom.db
 ```
 
 **Re-generate reports from saved JSON:**
@@ -141,7 +157,7 @@ php-fossil list show
 <details><summary>Library API usage (advanced)</summary>
 
 ```python
-from phpfossil import generate_dorks, scan_targets, generate_report
+from phpfossil import generate_dorks, scan_targets, generate_report, get_historical_results
 from phpfossil.models import ScanResult
 
 # Custom dork generation
@@ -155,6 +171,9 @@ for r in results:
         print(f"{r.url} → {r.php_version} ({len(r.vulns)} vulns)")
         for v in r.vulns:
             print(f"  • {v.cve} ({v.severity})")
+
+# Query persistent history
+history = get_historical_results(limit=10, url_filter="example")
 ```
 
 </details>
@@ -182,8 +201,9 @@ print(version)  # 7.4.33
 | max_concurrency   | 20      | Maximum simultaneous HTTP requests (capped at 50) |
 | timeout           | 12      | HTTP request timeout in seconds                  |
 | proxies           | []      | Optional list of proxy URLs for rotating requests |
+| db_path           | ~/.phpfossil/history.db | Path to persistent SQLite database for scan history |
 
-These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency` and `--timeout`. Proxy rotation is currently only available through the library API; future CLI enhancements will expose it.
+These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency` and `--timeout`. Proxy rotation is currently only available through the library API; future CLI enhancements will expose it. The SQLite store is used automatically by `scan` and `history` commands.
 
 ## 🧩 Architecture
 
@@ -196,19 +216,20 @@ flowchart TD
     Scanner --> Schema[schema.py]
     API --> Search[search.py]
     API --> Reporter[reporter.py]
+    API --> Store[store.py]
     Reporter --> HTML[Jinja2]
     Scanner --> Models[models.py]
     Models --> Pydantic[Validation]
 ```
 
-PHP Fossil follows a clean, modular architecture. The public API in `__init__.py` (`scan_targets`, `generate_dorks`, `generate_report`) orchestrates everything. `AsyncScanner` uses a rate-limited `httpx.AsyncClient` and delegates to specialized modules for fingerprinting, vulnerability lookup, schema extraction and reporting. All data flows through validated Pydantic models (`ScanResult`, `Vulnerability`, `SchemaResult`).
+PHP Fossil follows a clean, modular architecture. The public API in `__init__.py` (`scan_targets`, `generate_dorks`, `generate_report`, `store_results`, `get_historical_results`) orchestrates everything. `AsyncScanner` uses a rate-limited `httpx.AsyncClient` and delegates to specialized modules for fingerprinting, vulnerability lookup, schema extraction and reporting. All data flows through validated Pydantic models (`ScanResult`, `Vulnerability`, `SchemaResult`). Scans are automatically persisted to SQLite via the `Store`.
 
 ## 📁 Project structure
 
 ```text
 src/phpfossil/
 ├── __init__.py          # Public API, models, scan_targets, generate_dorks, generate_report
-├── cli.py               # Typer commands: scan, dorks, report, list
+├── cli.py               # Typer commands: scan, dorks, report, list, history
 ├── models.py            # Pydantic models (ScanResult, Vulnerability, SchemaResult, ExposedFile)
 ├── scanner.py           # Async scanning, _probe_target, rate limiting, proxy rotation
 ├── fingerprinter.py     # detect_from_headers, detect_from_body, detect_from_phpinfo, detect_from_error_page
@@ -216,6 +237,7 @@ src/phpfossil/
 ├── schema.py            # parse_sql_dump, locate_sql_urls
 ├── search.py            # DorkGenerator with 18 templates
 ├── reporter.py          # ReportGenerator.to_terminal, to_html + default Jinja template
+├── store.py             # Persistent SQLite store with automatic history tracking
 └── pyproject.toml       # Dependencies, console script entrypoint
 
 examples/
@@ -223,7 +245,7 @@ examples/
 └── custom_dorks.py      # Extending DorkGenerator
 
 tests/
-├── test_scanner.py      # Tests for fingerprinting, async mocks, exposed files
+├── test_scanner.py      # Tests for fingerprinting, async mocks, exposed files, Store
 └── test_vulndb.py       # CVE mapping, severity, EOL checks
 ```
 
@@ -236,14 +258,14 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mocks, `parse_sql_dump`, VulnDB lookup, CLI commands, and JSON serialization of `ScanResult` objects.
+Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mocks, `parse_sql_dump`, VulnDB lookup, CLI commands, JSON serialization of `ScanResult` objects and the new persistent `Store`.
 
 ## 📍 Roadmap
 
 <!-- roadmap:start -->
 - [x] **v0.1.0** — first release: Dork Generator, Version Fingerprint, Vuln Database, Schema Extractor
 - [x] Add proxy rotation and residential proxy support
-- [ ] Persistent SQLite store for historical scan results
+- [x] Persistent SQLite store for historical scan results
 - [ ] WordPress/Joomla/Laravel specific version fingerprinting
 - [ ] Integration with Nuclei for deeper exploit validation
 - [ ] Local LLM (Ollama) summaries of discovered issues

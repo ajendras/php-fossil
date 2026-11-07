@@ -3,7 +3,7 @@ maps vulns, extracts schemas and builds prioritized security lists.
 
 Public API:
     scan_targets, generate_dorks, generate_report, ScanResult, Vulnerability,
-    get_vulns_for_version, parse_sql_dump
+    get_vulns_for_version, parse_sql_dump, store_results, get_historical_results, Store
 """
 
 __version__ = "0.1.0"
@@ -14,6 +14,7 @@ from .search import generate_dorks
 from .reporter import generate_report
 from .vulndb import get_vulns_for_version
 from .schema import parse_sql_dump
+from .store import Store, get_historical_results, store_results
 
 __all__ = [
     "__version__",
@@ -26,4 +27,7 @@ __all__ = [
     "SchemaResult",
     "get_vulns_for_version",
     "parse_sql_dump",
+    "store_results",
+    "get_historical_results",
+    "Store",
 ]
