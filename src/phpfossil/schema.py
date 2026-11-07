@@ -20,7 +20,9 @@ def parse_sql_dump(content: str) -> SchemaResult:
       - Rough row count based on INSERT statement occurrences
 
     Handles common mysqldump, phpMyAdmin and manual backup formats.
-    Gracefully degrades on malformed or non-SQL content.
+    Gracefully degrades on malformed or non-SQL content. Improved regexes
+    ensure all tables/columns are captured even with complex column defs
+    (enums, decimals, etc.).
 
     Args:
         content: Full text content of a .sql file.
@@ -34,9 +36,9 @@ def parse_sql_dump(content: str) -> SchemaResult:
     if len(content.strip()) < 20:
         return SchemaResult()
 
-    # Extract table names (supports backticks, double and no quotes)
+    # More precise table detection that requires opening parenthesis
     table_pattern = re.compile(
-        r"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"']?(\w+)[`\"']?", re.DOTALL
+        r"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"']?(\w+)[`\"']?\s*\(",
     )
     tables = table_pattern.findall(content)
     unique_tables = list(dict.fromkeys(tables))  # preserve first-seen order
@@ -45,15 +47,16 @@ def parse_sql_dump(content: str) -> SchemaResult:
     row_counts: Dict[str, int] = {}
 
     for table in unique_tables:
-        # Capture the column definition block inside CREATE TABLE
+        # Robust capture of column block: stops at ENGINE/CHARSET/; after the closing paren
         create_pattern = re.compile(
-            rf"(?i)CREATE\s+TABLE[^`\"']*[`\"']?{re.escape(table)}[`\"']?\s*\((.+?)\)[^;]*?;",
+            rf"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"']?{re.escape(table)}[`\"']?"
+            rf"\s*\((.+?)\)\s*(?:ENGINE|CHARSET|COLLATE|;|$)",
             re.DOTALL,
         )
         create_match = create_pattern.search(content)
         if create_match:
             col_block = create_match.group(1)
-            # Match column names followed by a datatype
+            # Match column names followed by a datatype (handles backticks, complex types)
             col_pattern = re.compile(
                 r"[`\"']?(\w+)[`\"']?\s+(?:tinyint|smallint|int|bigint|varchar|char|text|"
                 r"date|datetime|timestamp|decimal|float|double|enum|set|blob)",
@@ -65,7 +68,6 @@ def parse_sql_dump(content: str) -> SchemaResult:
         # Estimate rows from INSERT statements
         insert_pattern = re.compile(
             rf"(?i)INSERT\s+(?:IGNORE\s+)?INTO\s+[`\"']?{re.escape(table)}[`\"']?",
-            re.IGNORECASE,
         )
         row_counts[table] = len(insert_pattern.findall(content))
 

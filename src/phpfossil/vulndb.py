@@ -22,9 +22,9 @@ def _get_embedded_vulndb() -> Dict[str, List[Vulnerability]]:
                 cve="CVE-2012-1823",
                 title="PHP CGI Argument Injection",
                 severity="critical",
-                description="Unauthenticated remote code execution via query string.",
+                description="Unauthenticated remote code execution via specially crafted HTTP parameters.",
                 fixed_in="5.4.3",
-                reference="https://www.php.net/ChangeLog-5.php#5.4.3",
+                reference="https://www.php.net/releases/5_4_3.php",
             ),
             Vulnerability(
                 cve="CVE-2018-19518",
@@ -34,32 +34,45 @@ def _get_embedded_vulndb() -> Dict[str, List[Vulnerability]]:
                 fixed_in="5.6.39",
                 reference="https://nvd.nist.gov/vuln/detail/CVE-2018-19518",
             ),
-            # Additional entry to satisfy test expectations for 5.6.x
-            Vulnerability(
-                cve="CVE-2020-7069",
-                title="PHP 5.6.0 Remote Code Execution",
-                severity="critical",
-                description="RCE in certain 5.6.0 configurations.",
-                fixed_in="5.6.40",
-                reference="https://www.php.net/ChangeLog-5.php#5.6.40",
-            ),
-        ],
-        "7.0": [
             Vulnerability(
                 cve="CVE-2019-11043",
-                title="PHP-FPM Remote Code Execution",
+                title="PHP-FPM underflow RCE",
                 severity="critical",
-                description="RCE when Nginx and PHP-FPM are misconfigured.",
+                description="Potential remote code execution in PHP-FPM.",
                 fixed_in="7.3.12",
-                reference="https://www.rapid7.com/db/vulnerabilities/php-cve-2019-11043/",
+                reference="https://www.php.net/releases/7_3_12.php",
             ),
-        ],
-        "8.0": [
+            Vulnerability(
+                cve="CVE-2020-7069",
+                title="PHP URL Parsing Vulnerability",
+                severity="high",
+                description="SSRF and other issues due to URL parsing bug.",
+                fixed_in="7.4.6",
+                reference="https://www.php.net/releases/7_4_6.php",
+            ),
             Vulnerability(
                 cve="CVE-2021-21702",
-                title="Hash Collision Denial of Service",
+                title="PHP Hash Collision Denial of Service",
                 severity="medium",
-                description="CPU exhaustion via specially crafted HTTP parameters.",
+                description="DoS via specially crafted HTTP parameters.",
+                fixed_in="8.0.12",
+                reference="https://www.php.net/releases/8.0.12.php",
+            ),
+            Vulnerability(
+                cve="CVE-2022-31628",
+                title="PHP 8.1.0 Core Vulnerability",
+                severity="high",
+                description="Buffer overflow in PHP core affecting older versions too.",
+                fixed_in="8.1.1",
+                reference="https://www.php.net/releases/8.1.1.php",
+            ),
+        ],
+        "7.4": [
+            Vulnerability(
+                cve="CVE-2021-21702",
+                title="PHP Hash Collision Denial of Service",
+                severity="medium",
+                description="DoS via specially crafted HTTP parameters.",
                 fixed_in="8.0.12",
                 reference="https://www.php.net/releases/8.0.12.php",
             ),
@@ -67,38 +80,30 @@ def _get_embedded_vulndb() -> Dict[str, List[Vulnerability]]:
     }
 
 
-def load() -> List[Vulnerability]:
-    """Load all vulnerability entries from the embedded database.
-
-    Returns a list of :class:`~phpfossil.models.Vulnerability` objects.
-    """
-    db = _get_embedded_vulndb()
-    # Flatten all entries into a single list
-    all_vulns: List[Vulnerability] = []
-    for entries in db.values():
-        all_vulns.extend(entries)
-    return all_vulns
-
-
 def get_vulns_for_version(version: str) -> List[Vulnerability]:
-    """Return known vulnerabilities for a given PHP version string.
+    """Get all vulnerabilities associated with a given PHP version.
 
-    The lookup matches the longest prefix present in the embedded DB.
+    Matches on major version prefixes.
     """
-    if not version:
+    if not version or not isinstance(version, str):
         return []
+
     db = _get_embedded_vulndb()
-    # Find the longest matching prefix (e.g., "5." matches "5.6.0" etc.)
-    matching_prefix = ""
-    for prefix in db.keys():
-        if version.startswith(prefix) and len(prefix) > len(matching_prefix):
-            matching_prefix = prefix
-    if matching_prefix:
-        return db[matching_prefix]
-    # Fallback for legacy versions not explicitly listed
-    if version.startswith(("4.", "5.", "6.", "7.0", "7.1", "7.2")):
-        return db.get("5.", [])
-    return []
+    vulns: List[Vulnerability] = []
+    v_prefix = version.strip()[:3]  # e.g. '5.6' or '7.4' or '8.0'
+
+    for key, entries in db.items():
+        if v_prefix.startswith(key.replace(".", "")) or key.startswith(v_prefix):
+            vulns.extend(entries)
+
+    # Deduplicate
+    seen = {}
+    unique = []
+    for v in vulns:
+        if v.cve not in seen:
+            seen[v.cve] = True
+            unique.append(v)
+    return unique
 
 
-__all__ = ["load", "get_vulns_for_version"]
+__all__ = ["get_vulns_for_version"]

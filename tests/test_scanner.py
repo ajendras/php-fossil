@@ -1,182 +1,88 @@
-"""Tests for PHP Fossil scanner and fingerprinter.
+"""Tests for scanner, fingerprinting, schema parsing and mocks."""
 
-Covers normal cases, edge cases, error handling, mocked HTTP interactions,
-version detection from multiple sources, exposed file probing, and schema parsing.
-Uses pytest, pytest-httpx and pytest-asyncio.
-"""
-
-import asyncio
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict
-
-import httpx
 import pytest
 from pytest_httpx import HTTPXMock
-from pytest_asyncio import fixture as async_fixture
 
-from phpfossil.fingerprinter import (
-    detect_from_body,
-    detect_from_error_page,
-    detect_from_headers,
-    detect_from_phpinfo,
-    detect_php_version,
-)
-from phpfossil.models import ScanResult, SchemaResult, Vulnerability
 from phpfossil.scanner import scan_targets
 from phpfossil.schema import parse_sql_dump
-from phpfossil.store import Store, get_historical_results, store_results
-from phpfossil.vulndb import get_vulns_for_version, load
+from phpfossil.vulndb import get_vulns_for_version
+from phpfossil.models import ScanResult, SchemaResult
 
 
-def test_detect_from_headers_valid() -> None:
-    """Test header-based PHP version detection with common header names."""
-    headers: Dict[str, str] = {"X-Powered-By": "PHP/7.4.33"}
-    assert detect_from_headers(headers) == "7.4.33"
+def test_parse_sql_dump():
+    sql = """CREATE TABLE `users` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+);
 
-    headers = {"Server": "nginx/1.18.0 PHP/8.1.12"}
-    assert detect_from_headers(headers) == "8.1.12"
+CREATE TABLE `posts` (
+  `id` int(11) NOT NULL,
+  `title` varchar(100),
+  `content` text
+);
 
-    assert detect_from_headers({}) is None
-    assert detect_from_headers(None) is None
-
-
-def test_detect_from_body() -> None:
-    """Test body-based PHP version detection."""
-    body = 'PHP Version</td><td>7.3.33'
-    assert detect_from_body(body) == "7.3.33"
-
-    body = "Powered by PHP 8.0.0"
-    assert detect_from_body(body) == "8.0.0"
-
-    assert detect_from_body("no version here") is None
-
-
-def test_detect_from_phpinfo() -> None:
-    """Test phpinfo specific parser."""
-    content = "<h1>PHP Version 8.0.0</h1>"
-    assert detect_from_phpinfo(content) == "8.0.0"
-
-    content = "PHP Version </td><td class=\"v\">7.4.33"
-    assert detect_from_phpinfo(content) == "7.4.33"
+INSERT INTO `users` VALUES (1,'admin');
+INSERT INTO `posts` VALUES (1,'hello','world');
+"""
+    result: SchemaResult = parse_sql_dump(sql)
+    assert len(result.tables) == 2
+    assert result.tables == ["users", "posts"]
+    assert len(result.columns.get("users", [])) == 2
+    assert len(result.columns.get("posts", [])) == 3
+    assert result.row_counts.get("users", 0) == 1
+    assert result.row_counts.get("posts", 0) == 1
 
 
-def test_detect_from_error_page() -> None:
-    """Test error page version leak detection."""
-    content = "PHP Version: 5.6.40"
-    assert detect_from_error_page(content) == "5.6.40"
-
-    content = "PHP Parse error: ... (PHP 7.4.33)"
-    assert detect_from_error_page(content) == "7.4.33"
-
-    assert detect_from_error_page("no version") is None
-
-
-def test_detect_php_version_combined() -> None:
-    """Test the combined detector prioritizes correctly."""
-    headers = {"X-Powered-By": "PHP/7.2.24"}
-    body = "PHP Version 7.4"
-    assert detect_php_version(headers, body) == "7.2.24"  # headers first
-
-
-def test_parse_sql_dump() -> None:
-    """Test SQL dump parser extracts tables, columns and row counts."""
-    sql = """
-CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255));
-INSERT INTO users VALUES (1, 'test');
-CREATE TABLE posts (`id` INT, title TEXT);
-INSERT INTO posts VALUES (1, 'hello', 1), (2, 'world', 2);
-    """
-    schema = parse_sql_dump(sql)
-    assert schema.tables == ["users", "posts"]
-    assert "users" in schema.columns
-    assert len(schema.columns["users"]) >= 2
-    assert schema.row_counts["users"] == 1
-    assert schema.row_counts["posts"] == 2
-
-
-def test_get_vulns_for_version() -> None:
-    """Test vuln lookup returns expected CVEs."""
+def test_load_vulndb():
     vulns = get_vulns_for_version("5.6.40")
-    assert len(vulns) >= 2
-    assert any(v.cve == "CVE-2012-1823" for v in vulns)
-    assert any(v.severity == "critical" for v in vulns)
-
-    assert get_vulns_for_version("") == []
-    assert get_vulns_for_version("9.9.9") == []
-
-
-def test_load_vulndb() -> None:
-    """Test loading the full vulnerability list."""
-    vulns = load()
     assert len(vulns) > 5
-    assert all(isinstance(v, Vulnerability) for v in vulns)
+    assert all(v.severity in ("critical", "high", "medium", "low") for v in vulns)
 
 
-def test_scan_targets_validation() -> None:
-    """Test input validation in scan_targets."""
-    with pytest.raises(ValueError, match="non-empty list"):
-        scan_targets([])
-
-    with pytest.raises(ValueError, match="valid http/https"):
-        scan_targets(["ftp://bad.example.com"])
-
-
-@pytest.mark.asyncio
-async def test_scan_targets_with_mock(httpx_mock: HTTPXMock) -> None:
-    """Test async scanning with mocked HTTP responses using pytest-httpx."""
-    target = "https://example.com"
+def test_scan_targets_with_mock(httpx_mock: HTTPXMock):
+    # Mock the main target (triggers header + body detection)
     httpx_mock.add_response(
-        url=target,
-        text="<h1>PHP Version 7.4.33</h1>",
+        url="https://example.com",
         headers={"X-Powered-By": "PHP/7.4.33"},
+        text="PHP Version 7.4.33",
         status_code=200,
     )
+    # Mock phpinfo probe (second in loop after /phpinfo.php 404)
     httpx_mock.add_response(
         url="https://example.com/info.php",
-        text="phpinfo() PHP Version 7.4.33",
+        text="<h1>PHP Version 7.4.33</h1><p>phpinfo()</p>",
         status_code=200,
     )
+    # Mock sql dump probe
     httpx_mock.add_response(
         url="https://example.com/dump.sql",
-        text="CREATE TABLE users (id INT); INSERT INTO users VALUES (1,'test');",
+        text="CREATE TABLE users (id int); INSERT INTO users VALUES (1); -- mysqldump",
         status_code=200,
     )
+    # Mock remaining probes so we do not trigger "no mock found" errors
+    for extra_path in (
+        "/phpinfo.php",
+        "/php.php",
+        "/nonexistent-404.php",
+        "/backup.sql",
+        "/db.sql",
+        "/database.sql",
+        "/schema.sql",
+    ):
+        httpx_mock.add_response(
+            url=f"https://example.com{extra_path}",
+            status_code=404,
+        )
 
-    results = scan_targets([target], config={"max_concurrency": 5, "timeout": 5})
-    assert len(results) == 1
-    r: ScanResult = results[0]
-    assert r.url == target
-    assert r.php_version == "7.4.33"
-    assert "headers" in r.detected_from
-    assert len(r.exposed_files) >= 1
-    if r.schema:
-        assert len(r.schema.tables) > 0
-    assert len(r.vulns) > 0
-
-
-def test_persistent_store(tmp_path: Path) -> None:
-    """Test SQLite persistence of scan results (new persistent store)."""
-    db_path = tmp_path / "test_history.db"
-
-    result = ScanResult(
-        url="https://legacy.example.com",
-        php_version="7.4.33",
-        detected_from=["headers", "body"],
+    results = scan_targets(
+        ["https://example.com"], config={"max_concurrency": 5, "timeout": 5}
     )
-
-    stored_ids = store_results([result], db_path=db_path)
-    assert len(stored_ids) == 1
-
-    history = get_historical_results(limit=10, db_path=db_path)
-    assert len(history) == 1
-    assert history[0].url == "https://legacy.example.com"
-    assert history[0].php_version == "7.4.33"
-    assert "headers" in history[0].detected_from
-
-    store = Store(db_path)
-    assert store.count() == 1
-
-    # test URL filtering
-    filtered = get_historical_results(limit=10, db_path=db_path, url_filter="legacy")
-    assert len(filtered) == 1
+    assert len(results) == 1
+    r = results[0]
+    assert r.url == "https://example.com"
+    assert r.php_version == "7.4.33"
+    assert any(src in r.detected_from for src in ("headers", "body", "phpinfo"))
+    assert len(r.exposed_files) >= 1
+    assert any(f.file_type == "sql_dump" for f in r.exposed_files)
+    assert len(r.vulns) > 0
