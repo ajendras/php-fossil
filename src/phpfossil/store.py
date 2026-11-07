@@ -8,7 +8,7 @@ for the public API and CLI.
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, Iterable, List, Optional, Union
 
 from .models import ScanResult
 
@@ -16,8 +16,10 @@ from .models import ScanResult
 class Store:
     """SQLite persistent store for scan history.
 
-    Creates ~/.phpfossil/history.db by default with a scan_history table
-    that stores full serialized ScanResult JSON.
+    Creates ``~/.phpfossil/history.db`` by default with a ``scan_history``
+    table that stores the full serialized ``ScanResult`` JSON. The table
+    also contains a ``scan_time`` column populated by SQLite's
+    ``CURRENT_TIMESTAMP`` for quick chronological queries.
     """
 
     def __init__(self, db_path: Optional[Union[Path, str]] = None) -> None:
@@ -32,7 +34,8 @@ class Store:
     def _init_db(self) -> None:
         """Create the scans table (and indexes) if it does not exist."""
         with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS scan_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     scan_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -40,7 +43,8 @@ class Store:
                     php_version TEXT,
                     result_json TEXT NOT NULL
                 )
-            """)
+                """
+            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_scan_url ON scan_history (url)"
             )
@@ -49,7 +53,11 @@ class Store:
             )
 
     def store(self, result: ScanResult) -> int:
-        """Persist one ScanResult, returns the inserted row ID."""
+        """Persist a single :class:`~phpfossil.models.ScanResult`.
+
+        Returns the inserted row ID (or ``0`` on failure). The full model
+        is serialized to JSON and stored in the ``result_json`` column.
+        """
         with sqlite3.connect(str(self.db_path)) as conn:
             json_data = result.model_dump_json()
             cur = conn.execute(
@@ -62,16 +70,31 @@ class Store:
             conn.commit()
             return cur.lastrowid or 0
 
-    def store_many(self, results: List[ScanResult]) -> List[int]:
-        """Store multiple ScanResult objects."""
-        return [self.store(r) for r in results]
+    def store_many(self, results: Iterable[ScanResult]) -> List[int]:
+        """Persist multiple ``ScanResult`` objects.
+
+        Returns a list of inserted row IDs preserving order.
+        """
+        ids: List[int] = []
+        for r in results:
+            ids.append(self.store(r))
+        return ids
 
     def get_history(
         self,
         limit: int = 50,
         url_filter: Optional[str] = None,
     ) -> List[ScanResult]:
-        """Return most recent scans, optionally filtered by URL substring."""
+        """Return the most recent scans, optionally filtered by URL substring.
+
+        Args:
+            limit: Maximum number of results to return (default 50).
+            url_filter: Optional ``LIKE`` filter applied to the ``url`` column.
+
+        Returns:
+            A list of :class:`~phpfossil.models.ScanResult` objects ordered
+            by insertion time (newest first).
+        """
         query = "SELECT result_json FROM scan_history"
         params: List[Any] = []
         if url_filter:
@@ -90,7 +113,7 @@ class Store:
             return results
 
     def count(self) -> int:
-        """Total number of stored scans."""
+        """Return the total number of stored scans."""
         with sqlite3.connect(str(self.db_path)) as conn:
             cursor = conn.execute("SELECT COUNT(*) FROM scan_history")
             row = cursor.fetchone()
@@ -98,13 +121,30 @@ class Store:
 
 
 def store_results(
-    results: List[ScanResult], db_path: Optional[Union[Path, str]] = None
+    results: Union[ScanResult, List[ScanResult]],
+    db_path: Optional[Union[Path, str]] = None,
 ) -> List[int]:
-    """Store scan results to the persistent SQLite database."""
+    """Store scan results to the persistent SQLite database.
+
+    The function is flexible: it accepts either a single ``ScanResult``
+    instance or a list of them. In both cases a list of inserted row IDs
+    is returned.
+
+    Args:
+        results: One ``ScanResult`` or a list of results to persist.
+        db_path: Optional custom path to the SQLite database.
+
+    Returns:
+        List of row IDs corresponding to the stored results.
+    """
+    if isinstance(results, ScanResult):
+        results = [results]
+
     if not results:
         return []
+
     store = Store(db_path)
-    return store.store_many(results)
+    return store.store_many(results)  # type: ignore[arg-type]
 
 
 def get_historical_results(
@@ -112,7 +152,16 @@ def get_historical_results(
     db_path: Optional[Union[Path, str]] = None,
     url_filter: Optional[str] = None,
 ) -> List[ScanResult]:
-    """Retrieve historical results from the SQLite store."""
+    """Retrieve historical results from the SQLite store.
+
+    Args:
+        limit: Maximum number of results to return.
+        db_path: Optional custom SQLite database path.
+        url_filter: Optional substring filter applied to the ``url`` column.
+
+    Returns:
+        List of ``ScanResult`` objects ordered by most recent scan.
+    """
     store = Store(db_path)
     return store.get_history(limit=limit, url_filter=url_filter)
 
