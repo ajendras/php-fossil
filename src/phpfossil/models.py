@@ -54,7 +54,10 @@ class SchemaResult(BaseModel):
 class ScanResult(BaseModel):
     """Result of scanning one target."""
 
-    model_config = ConfigDict(protected_namespaces=())
+    model_config = ConfigDict(
+        protected_namespaces=(),
+        populate_by_name=True,
+    )
 
     url: str = Field(..., description="The scanned URL")
     php_version: Optional[str] = Field(
@@ -65,13 +68,23 @@ class ScanResult(BaseModel):
     )
     vulns: List[Vulnerability] = Field(default_factory=list)
     exposed_files: List[ExposedFile] = Field(default_factory=list)
-    schema: Optional[SchemaResult] = None
+    schema_result: Optional[SchemaResult] = Field(
+        default=None,
+        alias="schema",
+        serialization_alias="schema",
+        description="Parsed information from an exposed SQL dump",
+    )
     errors: List[str] = Field(default_factory=list)
     scan_time: datetime = Field(default_factory=datetime.utcnow)
 
     def is_vulnerable(self) -> bool:
         """Return True if any vulnerabilities were found."""
         return len(self.vulns) > 0
+
+    @property
+    def schema(self) -> Optional[SchemaResult]:
+        """Backward-compatible accessor for the schema field (JSON remains 'schema')."""
+        return self.schema_result
 
     @field_validator("php_version")
     @classmethod

@@ -128,8 +128,8 @@ async def _probe_target(
                             content_preview=preview,
                         )
                     )
-                    if not result.schema:
-                        result.schema = parse_sql_dump(sql_resp.text)
+                    if not result.schema_result:
+                        result.schema_result = parse_sql_dump(sql_resp.text)
                     break
             except httpx.TransportError:
                 continue
