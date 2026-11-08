@@ -55,6 +55,7 @@ def detect_from_body(body: str) -> Optional[str]:
         return None
 
     patterns = [
+        r"(?i)PHP\s+Version\s*[:=]?\s*['\"]?([0-9.]+)",
         r"PHP Version</td>\s*<td[^>]*>([0-9.]+)",
         r"(?i)php(?:\s+version)?\s*[:=]\s*['\"]?([0-9.]+)",
         r"Powered by PHP ([0-9.]+)",
