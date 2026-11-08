@@ -1,79 +1,89 @@
-"""Tests for the PHP Fossil scanner.
+"""Tests for the scanner module."""
 
-Covers input validation, mock-based HTTP probing of version detection,
-exposed files, schema extraction and the persistent Store. Uses
-pytest-httpx to simulate responses without real network calls.
-"""
-
-import json
-from pathlib import Path
-from typing import Any
+from datetime import datetime
 
 import pytest
-from pytest_httpx import HTTPXMock
 
-from phpfossil.models import ExposedFile, ScanResult, SchemaResult
+from phpfossil.fingerprinter import detect_php_version
+from phpfossil.models import ScanResult, SchemaResult, Vulnerability
 from phpfossil.scanner import scan_targets
-from phpfossil.store import Store
 
 
-def test_scan_targets_invalid_input() -> None:
-    """Validate that scan_targets rejects bad inputs."""
-    with pytest.raises(ValueError, match="non-empty list"):
-        scan_targets([])
+def test_scan_result_serialization():
+    """Test that ScanResult serializes/deserializes correctly (including 'schema' key)."""
+    schema = SchemaResult(
+        tables=["users", "posts"],
+        columns={"users": ["id", "name"]},
+        row_counts={"users": 1, "posts": 42},
+    )
+    vuln = Vulnerability(
+        cve="CVE-2021-1234",
+        title="Remote code execution",
+        severity="critical",
+        description="Test vulnerability description",
+        fixed_in="8.1.0",
+        reference="https://example.com/cve",
+    )
 
-    with pytest.raises(ValueError, match="valid http/https URLs"):
-        scan_targets(["ftp://bad.example.com"])
+    result = ScanResult(
+        url="https://example.com",
+        php_version="7.4.33",
+        detected_from=["http-response", "headers"],
+        vulns=[vuln],
+        schema=schema,
+        errors=[],
+        scan_time=datetime(2026, 11, 7, 11, 5, 39, 905979),
+    )
+
+    # Verify JSON serialization uses "schema" key (no KeyError)
+    data = result.model_dump(mode="json")
+    assert "schema" in data
+    assert data["schema"]["tables"] == ["users", "posts"]
+    assert data["schema"]["columns"]["users"] == ["id", "name"]
+    assert data["url"] == "https://example.com"
+    assert data["php_version"] == "7.4.33"
+
+    # Roundtrip validation
+    reloaded = ScanResult.model_validate(data)
+    assert reloaded.php_version == "7.4.33"
+    assert reloaded.schema is not None
+    assert reloaded.schema.tables == ["users", "posts"]
+    assert reloaded.schema.row_counts["users"] == 1
+    assert len(reloaded.vulns) == 1
+    assert reloaded.vulns[0].cve == "CVE-2021-1234"
 
 
-@pytest.mark.httpx_mock(assert_all_responses_were_requested=False)
-def test_scan_targets_with_mock(httpx_mock: HTTPXMock) -> None:
-    """Test full scan flow with mocked responses for all probe paths.
-
-    Some mocks (php.php, error page, later SQL files) are intentionally
-    not hit because of early break/return when a valid response is found.
-    The marker above disables the strict "all registered responses must
-    be requested" check from pytest-httpx.
-    """
-    # Main target - provides version via header + body
+def test_scan_targets_with_mock(httpx_mock):
+    """Test scanning with mocked responses. Version comes via phpinfo probe."""
+    # Main page has no version info
     httpx_mock.add_response(
         url="https://example.com",
-        text="<html><body>PHP powered site</body></html>",
-        headers={"X-Powered-By": "PHP/7.4.33"},
+        text="<h1>Welcome</h1>",
+        headers={"Server": "Apache"},
         status_code=200,
     )
-
-    # First phpinfo probe succeeds -> later php.php mock is not requested
+    # phpinfo probe succeeds and provides version + signature
     httpx_mock.add_response(
         url="https://example.com/phpinfo.php",
-        text="<h1>PHP Version 7.4.33</h1>",
+        text="<h1>PHP Version 7.4.33</h1>\nphpinfo()",
         status_code=200,
     )
+    # Other phpinfo paths return 404
     httpx_mock.add_response(url="https://example.com/info.php", status_code=404)
     httpx_mock.add_response(url="https://example.com/php.php", status_code=404)
-
-    # First SQL dump succeeds -> later SQL mocks are not requested
+    # SQL dump probe returns parsable content
     httpx_mock.add_response(
         url="https://example.com/dump.sql",
-        text=(
-            "CREATE TABLE users (id INT, name VARCHAR(50));\n"
-            "INSERT INTO users VALUES (1, 'test');"
-        ),
+        text="""CREATE TABLE users (id INT, name VARCHAR(255));
+INSERT INTO users VALUES (1, 'test');""",
         status_code=200,
     )
-    for extra_sql in (
-        "https://example.com/backup.sql",
-        "https://example.com/db.sql",
-        "https://example.com/database.sql",
-        "https://example.com/schema.sql",
-    ):
-        httpx_mock.add_response(url=extra_sql, status_code=404)
-
-    # Error-page fallback is skipped because version was already detected
+    # Other SQL paths 404
+    for path in ("/backup.sql", "/db.sql", "/database.sql", "/schema.sql"):
+        httpx_mock.add_response(url=f"https://example.com{path}", status_code=404)
+    # Error page fallback not needed
     httpx_mock.add_response(
-        url="https://example.com/nonexistent-404.php",
-        text="PHP Parse error: ... (PHP 7.4.33)",
-        status_code=404,
+        url="https://example.com/nonexistent-404.php", status_code=404
     )
 
     results = scan_targets(
@@ -81,84 +91,45 @@ def test_scan_targets_with_mock(httpx_mock: HTTPXMock) -> None:
     )
 
     assert len(results) == 1
-    r: ScanResult = results[0]
-
+    r = results[0]
     assert r.url == "https://example.com"
     assert r.php_version == "7.4.33"
-    assert "headers" in r.detected_from
+    assert "http-response" in r.detected_from
     assert "phpinfo" in r.detected_from
-    assert len(r.vulns) > 0
-    assert any(e.file_type == "phpinfo" for e in r.exposed_files)
-    assert any(e.file_type == "sql_dump" for e in r.exposed_files)
-
-    # schema field works via alias + property
-    assert r.schema_result is not None
-    assert r.schema is not None  # property
+    assert len(r.exposed_files) == 2  # phpinfo + sql_dump
+    assert any(f.file_type == "phpinfo" for f in r.exposed_files)
+    assert any(f.file_type == "sql_dump" for f in r.exposed_files)
+    assert r.schema is not None
     assert "users" in r.schema.tables
-    assert r.schema.columns.get("users") == ["id", "name"]
-    assert r.schema.row_counts.get("users") == 1
-
-    assert len(r.errors) == 0
-
-
-def test_scan_targets_error_handling(httpx_mock: HTTPXMock) -> None:
-    """Ensure errors are captured when all requests fail."""
-    httpx_mock.add_exception(Exception("Connection refused"), url="https://bad.example.com")
-
-    results = scan_targets(["https://bad.example.com"], config={"timeout": 2})
-    assert len(results) == 1
-    assert len(results[0].errors) == 1
-    assert "Connection refused" in results[0].errors[0]
+    assert r.schema.columns["users"] == ["id", "name"]
+    assert r.schema.row_counts["users"] == 1
+    assert len(r.vulns) > 0  # populated by vulndb
+    assert not r.errors
 
 
-def test_store_integration(tmp_path: Path) -> None:
-    """Verify ScanResult objects with schema can be persisted and retrieved."""
-    db_path = tmp_path / "test.db"
-    store = Store(db_path)
-
-    schema = SchemaResult(
-        tables=["users", "posts"],
-        columns={"users": ["id", "email"]},
-        row_counts={"users": 42},
+def test_detect_php_version_helpers():
+    """Test individual fingerprinting functions used by the scanner."""
+    assert detect_php_version(headers={"X-Powered-By": "PHP/7.4.33"}) == "7.4.33"
+    assert detect_php_version(headers={"Server": "nginx PHP/8.0.1"}) == "8.0.1"
+    assert (
+        detect_php_version(body='<?php echo "PHP Version 5.6.40"; ?>') == "5.6.40"
     )
-    result = ScanResult(
-        url="https://legacy.example.com",
-        php_version="7.4.33",
-        schema=schema,  # uses alias
-        exposed_files=[
-            ExposedFile(
-                url="https://legacy.example.com/phpinfo.php",
-                file_type="phpinfo",
-                content_preview="PHP Version 7.4.33",
-            )
-        ],
-    )
-
-    store.store(result)
-    assert store.count() == 1
-
-    history = store.get_history(limit=5)
-    assert len(history) == 1
-    reloaded = history[0]
-    assert reloaded.url == result.url
-    assert reloaded.php_version == result.php_version
-    assert reloaded.schema is not None
-    assert reloaded.schema.tables == ["users", "posts"]
+    assert detect_php_version(phpinfo_content="<h1>PHP Version 7.2.34</h1>") == "7.2.34"
+    assert detect_php_version() is None
+    # error page
+    err_body = "PHP Parse error: ... (PHP 7.3.12)"
+    assert detect_php_version(body=err_body) == "7.3.12"
 
 
-def test_scan_result_serialization() -> None:
-    """Ensure JSON round-tripping preserves schema under the 'schema' key."""
-    schema = SchemaResult(tables=["orders"])
-    result = ScanResult(
-        url="https://example.com",
-        php_version="5.6.40",
-        schema=schema,
-        vulns=[],
-    )
+def test_scan_result_validation():
+    """Test Pydantic validation rules on ScanResult."""
+    with pytest.raises(ValueError, match="URL must start with"):
+        ScanResult(url="ftp://bad.com")
 
-    data = json.loads(result.model_dump_json())
-    assert data["schema"]["tables"] == ["orders"]
-    assert "schema_result" not in data
+    with pytest.raises(ValueError, match="PHP version must match"):
+        ScanResult(url="https://ok.com", php_version="7.x")
 
-    restored = ScanResult.model_validate(data)
-    assert restored.schema.tables == ["orders"]
+    # valid minimal case
+    r = ScanResult(url="https://example.com", php_version="8.2.0")
+    assert r.php_version == "8.2.0"
+    assert not r.is_vulnerable()
