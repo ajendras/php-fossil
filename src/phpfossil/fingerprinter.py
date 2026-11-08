@@ -5,7 +5,7 @@ phpinfo() output and error pages. Used by the AsyncScanner.
 """
 
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 
 def detect_from_headers(headers: Dict[str, str]) -> Optional[str]:
@@ -163,10 +163,149 @@ def detect_php_version(
     return None
 
 
+# ----------------------------------------------------------------------
+# CMS specific version detection
+# ----------------------------------------------------------------------
+
+
+def detect_wordpress_version(body: str) -> Optional[str]:
+    """Detect WordPress version from HTML body.
+
+    Looks for common patterns such as the generator meta tag or
+    inline "WordPress X.Y.Z" strings.
+
+    Args:
+        body: HTML content of a page.
+
+    Returns:
+        WordPress version string or None.
+    """
+    if not body or not isinstance(body, str):
+        return None
+
+    # Meta generator tag: <meta name="generator" content="WordPress 5.8.1">
+    meta_match = re.search(
+        r'<meta\s+name=["\']generator["\']\s+content=["\']WordPress\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)["\']',
+        body,
+        re.IGNORECASE,
+    )
+    if meta_match:
+        return meta_match.group(1)
+
+    # Inline mention: "WordPress 5.8.1"
+    inline_match = re.search(
+        r'WordPress\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        body,
+        re.IGNORECASE,
+    )
+    if inline_match:
+        return inline_match.group(1)
+
+    return None
+
+
+def detect_joomla_version(body: str) -> Optional[str]:
+    """Detect Joomla version from HTML body.
+
+    Searches for generator meta tag or typical version strings.
+
+    Args:
+        body: HTML content.
+
+    Returns:
+        Joomla version string or None.
+    """
+    if not body or not isinstance(body, str):
+        return None
+
+    # Meta generator tag: <meta name="generator" content="Joomla! - Open Source Content Management - Version 3.9.24">
+    meta_match = re.search(
+        r'<meta\s+name=["\']generator["\']\s+content=["\']Joomla!.*?Version\s+([0-9]+\.[0-9]+\.[0-9]+)["\']',
+        body,
+        re.IGNORECASE,
+    )
+    if meta_match:
+        return meta_match.group(1)
+
+    # Inline mention: "Joomla! 3.9.24"
+    inline_match = re.search(
+        r'Joomla!\s+([0-9]+\.[0-9]+\.[0-9]+)',
+        body,
+        re.IGNORECASE,
+    )
+    if inline_match:
+        return inline_match.group(1)
+
+    return None
+
+
+def detect_laravel_version(body: str) -> Optional[str]:
+    """Detect Laravel version from HTML body.
+
+    Looks for typical comments or meta tags that include the version.
+
+    Args:
+        body: HTML content.
+
+    Returns:
+        Laravel version string or None.
+    """
+    if not body or not isinstance(body, str):
+        return None
+
+    # Comment style: <!-- Laravel Framework 8.5.0 -->
+    comment_match = re.search(
+        r'<!--\s*Laravel\s+(?:Framework\s+)?([0-9]+\.[0-9]+\.[0-9]+)\s*-->',
+        body,
+        re.IGNORECASE,
+    )
+    if comment_match:
+        return comment_match.group(1)
+
+    # Inline mention: "Laravel 8.5.0"
+    inline_match = re.search(
+        r'Laravel\s+(?:Framework\s+)?([0-9]+\.[0-9]+\.[0-9]+)',
+        body,
+        re.IGNORECASE,
+    )
+    if inline_match:
+        return inline_match.group(1)
+
+    return None
+
+
+def detect_cms_version(body: str) -> Optional[Tuple[str, str]]:
+    """Detect CMS name and version from HTML body.
+
+    Checks WordPress, Joomla, then Laravel in that order.
+
+    Returns:
+        Tuple of (cms_name, version) e.g. ("wordpress", "5.8.1") or None.
+    """
+    wp = detect_wordpress_version(body)
+    if wp:
+        return ("wordpress", wp)
+
+    joomla = detect_joomla_version(body)
+    if joomla:
+        return ("joomla", joomla)
+
+    laravel = detect_laravel_version(body)
+    if laravel:
+        return ("laravel", laravel)
+
+    return None
+
+
 __all__ = [
     "detect_from_headers",
     "detect_from_body",
     "detect_from_phpinfo",
     "detect_from_error_page",
     "detect_php_version",
+    # CMS helpers
+    "detect_wordpress_version",
+    "detect_joomla_version",
+    "detect_laravel_version",
+    "detect_cms_version",
 ]

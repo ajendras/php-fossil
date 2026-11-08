@@ -222,7 +222,7 @@ flowchart TD
     Models --> Pydantic[Validation]
 ```
 
-PHP Fossil follows a clean, modular architecture. The public API in `__init__.py` (`scan_targets`, `generate_dorks`, `generate_report`, `store_results`, `get_historical_results`) orchestrates everything. `AsyncScanner` uses a rate-limited `httpx.AsyncClient` and delegates to specialized modules for fingerprinting, vulnerability lookup, schema extraction and reporting. All data flows through validated Pydantic models (`ScanResult`, `Vulnerability`, `SchemaResult`). Scans are automatically persisted to SQLite via the `Store`.
+PHP Fossil follows a clean, modular architecture. The public API in `__init__.py` (`scan_targets`, `generate_dorks`, `generate_report`, `store_results`, `get_historical_results`) orchestrates everything. `AsyncScanner` uses a rate-limited `httpx.AsyncClient` and delegates to specialized modules for fingerprinting, vulnerability lookup, schema extraction and reporting. All data flows through validated Pydantic models (`ScanResult`, `Vulnerability`, `SchemaResult`, `ExposedFile`). Scans are automatically persisted to SQLite via the `Store`.
 
 ## 📁 Project structure
 
@@ -246,7 +246,8 @@ examples/
 
 tests/
 ├── test_scanner.py      # Tests for fingerprinting, async mocks, exposed files, Store
-└── test_vulndb.py       # CVE mapping, severity, EOL checks
+├── test_vulndb.py       # CVE mapping, severity, EOL checks
+├── test_fingerprinter_cms.py  # New tests for CMS version detection
 ```
 
 ## 🧪 Testing
@@ -266,7 +267,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] **v0.1.0** — first release: Dork Generator, Version Fingerprint, Vuln Database, Schema Extractor
 - [x] Add proxy rotation and residential proxy support
 - [x] Persistent SQLite store for historical scan results
-- [ ] WordPress/Joomla/Laravel specific version fingerprinting
+- [x] WordPress/Joomla/Laravel specific version fingerprinting
 - [ ] Integration with Nuclei for deeper exploit validation
 - [ ] Local LLM (Ollama) summaries of discovered issues
 - [ ] Interactive terminal TUI with textual for live scanning

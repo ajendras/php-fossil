@@ -15,6 +15,17 @@ from .reporter import generate_report
 from .vulndb import get_vulns_for_version
 from .schema import parse_sql_dump
 from .store import Store, get_historical_results, store_results
+from .fingerprinter import (
+    detect_from_headers,
+    detect_from_body,
+    detect_from_phpinfo,
+    detect_from_error_page,
+    detect_php_version,
+    detect_wordpress_version,
+    detect_joomla_version,
+    detect_laravel_version,
+    detect_cms_version,
+)
 
 __all__ = [
     "__version__",
@@ -30,4 +41,14 @@ __all__ = [
     "store_results",
     "get_historical_results",
     "Store",
+    # Fingerprinter helpers
+    "detect_from_headers",
+    "detect_from_body",
+    "detect_from_phpinfo",
+    "detect_from_error_page",
+    "detect_php_version",
+    "detect_wordpress_version",
+    "detect_joomla_version",
+    "detect_laravel_version",
+    "detect_cms_version",
 ]
