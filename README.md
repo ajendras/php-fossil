@@ -104,12 +104,13 @@ The CLI is automatically installed as the `php-fossil` command.
 ## ⚡ Quick start
 
 ```python
+import asyncio
 from phpfossil import scan_targets, generate_report, store_results, get_historical_results, validate_with_nuclei
 
-results = scan_targets(
+results = asyncio.run(scan_targets(
     ["https://httpbin.org", "http://example.com"],
     config={"max_concurrency": 10, "timeout": 15, "use_nuclei": True}
-)
+))
 
 # results are automatically persisted to SQLite
 store_results(results)
@@ -159,6 +160,7 @@ php-fossil list show
 <details><summary>Library API usage (advanced)</summary>
 
 ```python
+import asyncio
 from phpfossil import generate_dorks, scan_targets, generate_report, get_historical_results, validate_with_nuclei
 from phpfossil.models import ScanResult, Vulnerability
 
@@ -167,10 +169,10 @@ dorks = generate_dorks("8.0", count=12)
 print(dorks[0])  # e.g. intitle:"phpinfo()" "PHP Version 8.0"
 
 # Direct scan with Nuclei validation
-results: list[ScanResult] = scan_targets(
+results: list[ScanResult] = asyncio.run(scan_targets(
     ["https://httpbin.org"],
     config={"use_nuclei": True}
-)
+))
 for r in results:
     if r.is_vulnerable():
         print(f"{r.url} → {r.php_version} ({len(r.vulns)} vulns, {len(r.nuclei_findings)} confirmed)")

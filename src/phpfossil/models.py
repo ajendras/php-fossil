@@ -6,7 +6,7 @@ All models include validation, rich docstrings and secure defaults.
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -103,7 +103,7 @@ class ScanResult(BaseModel):
         description="Validated exploit findings from Nuclei",
     )
     errors: List[str] = Field(default_factory=list)
-    scan_time: datetime = Field(default_factory=datetime.utcnow)
+    scan_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def is_vulnerable(self) -> bool:
         """Return True if any vulnerabilities were found."""

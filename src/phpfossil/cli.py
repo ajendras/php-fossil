@@ -1,9 +1,10 @@
 """Typer-based CLI for PHP Fossil with rich terminal output."""
 
-from datetime import datetime
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Annotated, Optional
 
+import asyncio
 import json
 import typer
 from rich.console import Console
@@ -215,7 +216,7 @@ def cmd_list(
                 "url": url,
                 "php_version": php_version,
                 "vuln_count": 3,
-                "added": datetime.utcnow().isoformat(),
+                "added": datetime.now(UTC).isoformat(),
             }
         )
         list_file.write_text(json.dumps(tracked, indent=2, default=str), encoding="utf-8")
