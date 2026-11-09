@@ -14,7 +14,7 @@ from jinja2 import Template
 from rich.console import Console
 from rich.table import Table
 
-from .models import ScanResult
+from .models import NucleiFinding, ScanResult
 
 
 class ReportGenerator:
@@ -31,7 +31,7 @@ class ReportGenerator:
         """Render rich terminal table summarizing scan results.
 
         Includes color-coded vulnerability counts, exposed file
-        indicators, and high-risk recommendations.
+        indicators, Nuclei confirmations and high-risk recommendations.
 
         Args:
             results: List of ScanResult objects from a scan.
@@ -56,9 +56,11 @@ class ReportGenerator:
         table.add_column("Vulns", style="red", justify="right")
         table.add_column("Exposed Files", style="yellow", justify="right")
         table.add_column("Schema", style="green", justify="center")
+        table.add_column("Nuclei", style="cyan", justify="right")
 
         high_risk = sum(1 for r in results if r.is_vulnerable())
         total_exposed = sum(len(r.exposed_files) for r in results)
+        total_nuclei = sum(len(r.nuclei_findings) for r in results if not any(f.template == "error" for f in r.nuclei_findings))
 
         for r in results:
             version_str = r.php_version or "[dim]unknown[/dim]"
@@ -72,6 +74,10 @@ class ReportGenerator:
                 if r.schema and r.schema.tables
                 else "[dim]No[/]"
             )
+            nuclei_count = len([f for f in r.nuclei_findings if f.template != "error"])
+            nuclei_str = (
+                f"[bold cyan]{nuclei_count}[/]" if nuclei_count > 0 else str(nuclei_count)
+            )
 
             table.add_row(
                 r.url,
@@ -79,18 +85,24 @@ class ReportGenerator:
                 vuln_str,
                 exposed_str,
                 schema_str,
+                nuclei_str,
             )
 
         self.console.print(table)
         self.console.print(
             f"\n[bold]Summary:[/] [cyan]{len(results)}[/] targets • "
-            f"[red]{high_risk}[/] high-risk • [yellow]{total_exposed}[/] exposed files"
+            f"[red]{high_risk}[/] high-risk • [yellow]{total_exposed}[/] exposed files • "
+            f"[cyan]{total_nuclei}[/] Nuclei confirmations"
         )
 
         if high_risk > 0:
             self.console.print(
                 "[bold red]Recommendation:[/] Upgrade all pre-8.1 PHP instances "
                 "and remove exposed phpinfo() and SQL dump files immediately."
+            )
+        if total_nuclei > 0:
+            self.console.print(
+                "[bold cyan]Nuclei:[/] Confirmed exploits found. Review matched templates above."
             )
 
     def to_html(
@@ -129,6 +141,10 @@ class ReportGenerator:
             template = Template(self._default_html_template())
 
         total_vulns = sum(len(r.vulns) for r in results)
+        total_nuclei = sum(
+            len([f for f in r.nuclei_findings if f.template != "error"])
+            for r in results
+        )
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
 
         return template.render(
@@ -138,13 +154,14 @@ class ReportGenerator:
             total_targets=len(results),
             total_vulns=total_vulns,
             high_risk=sum(1 for r in results if r.is_vulnerable()),
+            total_nuclei=total_nuclei,
         )
 
     def _default_html_template(self) -> str:
         """Return a modern, self-contained HTML template with CSS variables.
 
         Features dark theme by default, responsive grid, hover states,
-        focus indicators, and severity-based coloring.
+        focus indicators, severity-based coloring and a Nuclei column.
         """
         return """<!DOCTYPE html>
 <html lang="en">
@@ -162,6 +179,7 @@ class ReportGenerator:
             --red: #f87171;
             --orange: #fb923c;
             --green: #4ade80;
+            --cyan: #67e8f9;
         }
         @media (prefers-color-scheme: light) {
             :root {
@@ -233,6 +251,10 @@ class ReportGenerator:
             background: #7f1d1d;
             color: #fda4af;
         }
+        .nuclei-tag {
+            background: #164e63;
+            color: var(--cyan);
+        }
         a {
             color: var(--accent);
             text-decoration: none;
@@ -281,6 +303,10 @@ class ReportGenerator:
                 <div style="font-size:2rem;font-weight:600;color:#f59e0b">{{ high_risk }}</div>
                 <div style="font-size:0.8rem;opacity:0.7">High-Risk Targets</div>
             </div>
+            <div class="stat">
+                <div style="font-size:2rem;font-weight:600;color:var(--cyan)">{{ total_nuclei }}</div>
+                <div style="font-size:0.8rem;opacity:0.7">Nuclei Confirmations</div>
+            </div>
         </div>
         <p><strong>Generated:</strong> {{ now }}</p>
     </div>
@@ -295,6 +321,7 @@ class ReportGenerator:
                     <th>Vulnerabilities</th>
                     <th>Exposed Files</th>
                     <th>Schema</th>
+                    <th>Nuclei</th>
                 </tr>
             </thead>
             <tbody>
@@ -338,6 +365,28 @@ class ReportGenerator:
                             <span style="opacity:0.5">No</span>
                         {% endif %}
                     </td>
+                    <td>
+                        {% if res.nuclei_findings %}
+                            {% set confirmed = [] %}
+                            {% for f in res.nuclei_findings %}
+                                {% if f.template != 'error' %}
+                                    {% if confirmed.append(f) %}{% endif %}
+                                {% endif %}
+                            {% endfor %}
+                            {% if confirmed %}
+                                <span class="tag nuclei-tag">{{ confirmed|length }} confirmed</span>
+                                <ul style="margin-top:8px;padding-left:1.2rem;font-size:0.85rem">
+                                {% for f in confirmed[:3] %}
+                                    <li>{{ f.name }} <span style="opacity:0.6">({{ f.severity }})</span></li>
+                                {% endfor %}
+                                </ul>
+                            {% else %}
+                                <span style="opacity:0.5">—</span>
+                            {% endif %}
+                        {% else %}
+                            <span style="opacity:0.5">—</span>
+                        {% endif %}
+                    </td>
                 </tr>
             {% endfor %}
             </tbody>
@@ -352,6 +401,7 @@ class ReportGenerator:
             <li>Ensure no database schema or backup .sql files are publicly accessible.</li>
             <li>Configure web servers to suppress version strings in HTTP headers.</li>
             <li>Review and remediate every CVE listed above using the supplied references.</li>
+            <li>For any Nuclei confirmations, treat them as high-priority actionable issues.</li>
         </ul>
     </div>
 

@@ -77,6 +77,7 @@ def scan(
     ] = None,
     concurrency: Annotated[int, typer.Option("--concurrency", "-c", min=5, max=100)] = 20,
     timeout: Annotated[int, typer.Option("--timeout", min=5, max=60)] = 12,
+    nuclei: Annotated[bool, typer.Option("--nuclei", help="Enable Nuclei for deeper exploit validation")] = False,
     output: Annotated[Path, typer.Option("--output", "-o")] = Path("phpfossil-results.json"),
     html: Annotated[Optional[Path], typer.Option("--html", help="Path for HTML report")] = None,
 ) -> None:
@@ -89,9 +90,13 @@ def scan(
         console.print("[yellow]No targets supplied, using demonstration targets...[/]")
         targets = ["https://httpbin.org", "http://example.com"]
 
-    config = {"max_concurrency": concurrency, "timeout": timeout}
+    config = {
+        "max_concurrency": concurrency,
+        "timeout": timeout,
+        "use_nuclei": nuclei,
+    }
 
-    console.print(f"[bold blue]Scanning {len(targets)} target(s) (concurrency={concurrency})...[/]")
+    console.print(f"[bold blue]Scanning {len(targets)} target(s) (concurrency={concurrency}, nuclei={nuclei})...[/]")
     results = scan_targets(targets, config=config)
 
     # Persist raw results

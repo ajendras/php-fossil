@@ -22,6 +22,7 @@ from .fingerprinter import (
     detect_from_phpinfo,
 )
 from .models import ExposedFile, ScanResult, SchemaResult
+from .nuclei import validate_with_nuclei
 from .schema import parse_sql_dump
 from .vulndb import get_vulns_for_version
 
@@ -38,6 +39,9 @@ async def _probe_target(
     matching phpinfo pages and SQL dumps. Always probes the error-page fallback.
     Appends "phpinfo" to detected_from whenever a phpinfo page is discovered
     (even if version was detected elsewhere) to match test expectations.
+
+    Nuclei validation is performed after the async phase in scan_targets()
+    when config["use_nuclei"] is True.
 
     Args:
         url: Target URL.
@@ -180,7 +184,9 @@ def scan_targets(
     """Scan a list of targets concurrently and return ScanResult objects.
 
     Uses a rate-limited async HTTP client. Validates input and respects
-    concurrency, timeout, and optional proxy rotation settings.
+    concurrency, timeout, and optional proxy rotation and Nuclei settings.
+    When use_nuclei=True, validate_with_nuclei() is called for every
+    result that contains vulns.
     """
     if not isinstance(targets, list) or not targets:
         raise ValueError("targets must be a non-empty list of URL strings")
@@ -204,4 +210,22 @@ def scan_targets(
         tasks = [bounded_probe(t, i) for i, t in enumerate(targets)]
         return await asyncio.gather(*tasks)
 
-    return asyncio.run(_run())
+    results = asyncio.run(_run())
+
+    # Post-process with Nuclei when enabled (only on targets with vulns)
+    if config.get("use_nuclei", False):
+        for result in results:
+            if result.vulns:
+                try:
+                    nuclei_results = validate_with_nuclei(
+                        result.url,
+                        result.vulns,
+                        timeout=config.get("timeout", 15),
+                    )
+                    result.nuclei_findings = nuclei_results
+                    if any(n for n in nuclei_results if not n.template.startswith("error")):
+                        result.detected_from.append("nuclei")
+                except Exception as exc:  # noqa: BLE001
+                    result.errors.append(f"Nuclei error: {exc}")
+
+    return results

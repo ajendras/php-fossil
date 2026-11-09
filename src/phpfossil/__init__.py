@@ -2,13 +2,20 @@
 maps vulns, extracts schemas and builds prioritized security lists.
 
 Public API:
-    scan_targets, generate_dorks, generate_report, ScanResult, Vulnerability,
-    get_vulns_for_version, parse_sql_dump, store_results, get_historical_results, Store
+    scan_targets, generate_dorks, generate_report, validate_with_nuclei,
+    ScanResult, Vulnerability, NucleiFinding, get_vulns_for_version,
+    parse_sql_dump, store_results, get_historical_results, Store
 """
 
 __version__ = "0.1.0"
 
-from .models import ExposedFile, ScanResult, SchemaResult, Vulnerability
+from .models import (
+    ExposedFile,
+    NucleiFinding,
+    ScanResult,
+    SchemaResult,
+    Vulnerability,
+)
 from .scanner import scan_targets
 from .search import generate_dorks
 from .reporter import generate_report
@@ -26,14 +33,17 @@ from .fingerprinter import (
     detect_laravel_version,
     detect_cms_version,
 )
+from .nuclei import validate_with_nuclei, NucleiValidator
 
 __all__ = [
     "__version__",
     "scan_targets",
     "generate_dorks",
     "generate_report",
+    "validate_with_nuclei",
     "ScanResult",
     "Vulnerability",
+    "NucleiFinding",
     "ExposedFile",
     "SchemaResult",
     "get_vulns_for_version",
@@ -51,4 +61,6 @@ __all__ = [
     "detect_joomla_version",
     "detect_laravel_version",
     "detect_cms_version",
+    # Nuclei helpers
+    "NucleiValidator",
 ]

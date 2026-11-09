@@ -55,15 +55,19 @@ Maps versions to embedded CVEs with severity and exploit links
 Locates exposed .sql files and parses tables/columns with `parse_sql_dump()`
 </td>
 <td>
+🔬 <b>Nuclei Integration</b><br>
+Deeper exploit validation via ProjectDiscovery Nuclei templates for confirmed RCE/LFI on legacy PHP
+</td>
+<td>
 📋 <b>List Manager</b><br>
 Saves, filters and exports at-risk domains via the `list` CLI command
 </td>
+</tr>
+<tr>
 <td>
 📑 <b>Rich Reports</b><br>
 Terminal tables and beautiful HTML reports via `ReportGenerator`
 </td>
-</tr>
-<tr>
 <td>
 ⚡ <b>Async Scanner</b><br>
 Concurrent, rate-limited scans with `scan_targets()` and configurable limits
@@ -71,10 +75,6 @@ Concurrent, rate-limited scans with `scan_targets()` and configurable limits
 <td>
 🧩 <b>Extensible Core</b><br>
 Clean module API for new fingerprint methods or data sources
-</td>
-<td>
-🔀 <b>Proxy Rotation</b><br>
-Optional proxy list for rotating outbound requests, supporting residential proxies
 </td>
 </tr>
 </table>
@@ -99,14 +99,16 @@ pip install -e ".[dev]"
 
 The CLI is automatically installed as the `php-fossil` command.
 
+**Nuclei requirement (optional):** For exploit validation run `go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest` and ensure `nuclei` is in your PATH.
+
 ## ⚡ Quick start
 
 ```python
-from phpfossil import scan_targets, generate_report, store_results, get_historical_results
+from phpfossil import scan_targets, generate_report, store_results, get_historical_results, validate_with_nuclei
 
 results = scan_targets(
     ["https://httpbin.org", "http://example.com"],
-    config={"max_concurrency": 10, "timeout": 15}
+    config={"max_concurrency": 10, "timeout": 15, "use_nuclei": True}
 )
 
 # results are automatically persisted to SQLite
@@ -127,10 +129,10 @@ history = get_historical_results(limit=5)
 php-fossil dorks --version 7.4 --count 20 --save dorks.txt
 ```
 
-**Scan targets from a file with custom limits:**
+**Scan targets from a file with Nuclei validation:**
 
 ```bash
-php-fossil scan -f targets.txt --concurrency 25 --timeout 10 --html report.html
+php-fossil scan -f targets.txt --concurrency 25 --timeout 10 --nuclei --html report.html
 ```
 
 **View historical scans from the persistent store:**
@@ -157,23 +159,29 @@ php-fossil list show
 <details><summary>Library API usage (advanced)</summary>
 
 ```python
-from phpfossil import generate_dorks, scan_targets, generate_report, get_historical_results
-from phpfossil.models import ScanResult
+from phpfossil import generate_dorks, scan_targets, generate_report, get_historical_results, validate_with_nuclei
+from phpfossil.models import ScanResult, Vulnerability
 
 # Custom dork generation
 dorks = generate_dorks("8.0", count=12)
 print(dorks[0])  # e.g. intitle:"phpinfo()" "PHP Version 8.0"
 
-# Direct scan with full result inspection
-results: list[ScanResult] = scan_targets(["https://httpbin.org"])
+# Direct scan with Nuclei validation
+results: list[ScanResult] = scan_targets(
+    ["https://httpbin.org"],
+    config={"use_nuclei": True}
+)
 for r in results:
     if r.is_vulnerable():
-        print(f"{r.url} → {r.php_version} ({len(r.vulns)} vulns)")
+        print(f"{r.url} → {r.php_version} ({len(r.vulns)} vulns, {len(r.nuclei_findings)} confirmed)")
         for v in r.vulns:
             print(f"  • {v.cve} ({v.severity})")
+    for f in r.nuclei_findings:
+        print(f"    Nuclei confirmed: {f.name} ({f.severity})")
 
-# Query persistent history
-history = get_historical_results(limit=10, url_filter="example")
+# Standalone Nuclei validation
+vulns = [Vulnerability(cve="CVE-2019-11043", title="...", severity="high", description="...")]
+findings = validate_with_nuclei("https://example.com", vulns)
 ```
 
 </details>
@@ -201,9 +209,10 @@ print(version)  # 7.4.33
 | max_concurrency   | 20      | Maximum simultaneous HTTP requests (capped at 50) |
 | timeout           | 12      | HTTP request timeout in seconds                  |
 | proxies           | []      | Optional list of proxy URLs for rotating requests |
+| use_nuclei        | false   | Enable Nuclei for deeper exploit validation (requires `nuclei` binary in PATH) |
 | db_path           | ~/.phpfossil/history.db | Path to persistent SQLite database for scan history |
 
-These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency` and `--timeout`. Proxy rotation is currently only available through the library API; future CLI enhancements will expose it. The SQLite store is used automatically by `scan` and `history` commands.
+These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency`, `--timeout` and `--nuclei`. Proxy rotation and Nuclei are currently only available through the library API and the new `--nuclei` flag; future CLI enhancements will expand options. The SQLite store is used automatically by `scan` and `history` commands.
 
 ## 🧩 Architecture
 
@@ -214,6 +223,7 @@ flowchart TD
     Scanner --> Fingerprinter[fingerprinter.py]
     Scanner --> VulnDB[vulndb.py]
     Scanner --> Schema[schema.py]
+    Scanner --> Nuclei[nuclei.py]
     API --> Search[search.py]
     API --> Reporter[reporter.py]
     API --> Store[store.py]
@@ -222,7 +232,7 @@ flowchart TD
     Models --> Pydantic[Validation]
 ```
 
-PHP Fossil follows a clean, modular architecture. The public API in `__init__.py` (`scan_targets`, `generate_dorks`, `generate_report`, `store_results`, `get_historical_results`) orchestrates everything. `AsyncScanner` uses a rate-limited `httpx.AsyncClient` and delegates to specialized modules for fingerprinting, vulnerability lookup, schema extraction and reporting. All data flows through validated Pydantic models (`ScanResult`, `Vulnerability`, `SchemaResult`, `ExposedFile`). Scans are automatically persisted to SQLite via the `Store`.
+PHP Fossil follows a clean, modular architecture. The public API in `__init__.py` (`scan_targets`, `generate_dorks`, `generate_report`, `store_results`, `get_historical_results`, `validate_with_nuclei`) orchestrates everything. `AsyncScanner` uses a rate-limited `httpx.AsyncClient` and delegates to specialized modules for fingerprinting, vulnerability lookup, schema extraction, Nuclei validation and reporting. All data flows through validated Pydantic models (`ScanResult`, `Vulnerability`, `SchemaResult`, `ExposedFile`, `NucleiFinding`). Scans are automatically persisted to SQLite via the `Store`.
 
 ## 📁 Project structure
 
@@ -230,11 +240,12 @@ PHP Fossil follows a clean, modular architecture. The public API in `__init__.py
 src/phpfossil/
 ├── __init__.py          # Public API, models, scan_targets, generate_dorks, generate_report
 ├── cli.py               # Typer commands: scan, dorks, report, list, history
-├── models.py            # Pydantic models (ScanResult, Vulnerability, SchemaResult, ExposedFile)
-├── scanner.py           # Async scanning, _probe_target, rate limiting, proxy rotation
+├── models.py            # Pydantic models (ScanResult, Vulnerability, SchemaResult, ExposedFile, NucleiFinding)
+├── scanner.py           # Async scanning, _probe_target, rate limiting, proxy rotation, Nuclei post-processing
 ├── fingerprinter.py     # detect_from_headers, detect_from_body, detect_from_phpinfo, detect_from_error_page
 ├── vulndb.py            # _get_embedded_vulndb, get_vulns_for_version
 ├── schema.py            # parse_sql_dump, locate_sql_urls
+├── nuclei.py            # validate_with_nuclei, Nuclei template mapping, subprocess runner
 ├── search.py            # DorkGenerator with 18 templates
 ├── reporter.py          # ReportGenerator.to_terminal, to_html + default Jinja template
 ├── store.py             # Persistent SQLite store with automatic history tracking
@@ -245,7 +256,7 @@ examples/
 └── custom_dorks.py      # Extending DorkGenerator
 
 tests/
-├── test_scanner.py      # Tests for fingerprinting, async mocks, exposed files, Store
+├── test_scanner.py      # Tests for fingerprinting, async mocks, exposed files, Store, Nuclei
 ├── test_vulndb.py       # CVE mapping, severity, EOL checks
 ├── test_fingerprinter_cms.py  # New tests for CMS version detection
 ```
@@ -259,7 +270,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mocks, `parse_sql_dump`, VulnDB lookup, CLI commands, JSON serialization of `ScanResult` objects and the new persistent `Store`.
+Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mocks, `parse_sql_dump`, VulnDB lookup, CLI commands, JSON serialization of `ScanResult` objects, the new persistent `Store` and mocked Nuclei validation.
 
 ## 📍 Roadmap
 
@@ -268,7 +279,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Add proxy rotation and residential proxy support
 - [x] Persistent SQLite store for historical scan results
 - [x] WordPress/Joomla/Laravel specific version fingerprinting
-- [ ] Integration with Nuclei for deeper exploit validation
+- [x] Integration with Nuclei for deeper exploit validation
 - [ ] Local LLM (Ollama) summaries of discovered issues
 - [ ] Interactive terminal TUI with textual for live scanning
 - [ ] GitHub Action for scheduled scans of your own domains

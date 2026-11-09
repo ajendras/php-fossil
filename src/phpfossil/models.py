@@ -1,8 +1,8 @@
 """Pydantic models for PHP Fossil.
 
 Core data structures representing scan outcomes, vulnerabilities,
-exposed files and parsed database schemas. All models include
-validation, rich docstrings and secure defaults.
+exposed files, parsed database schemas and Nuclei validation results.
+All models include validation, rich docstrings and secure defaults.
 """
 
 import re
@@ -51,6 +51,32 @@ class SchemaResult(BaseModel):
     row_counts: Dict[str, int] = Field(default_factory=dict)
 
 
+class NucleiFinding(BaseModel):
+    """Represents a finding returned by a Nuclei scan."""
+
+    template: str = Field(..., description="Nuclei template ID that matched")
+    name: str = Field(..., description="Name of the template")
+    severity: str = Field(..., description="Severity reported by Nuclei")
+    matched_at: Optional[str] = Field(
+        None, alias="matched-at", description="URL where match occurred"
+    )
+    description: Optional[str] = Field(None, description="Optional description")
+    type: Optional[str] = Field(None, description="Type of check (http, etc)")
+
+    model_config = ConfigDict(
+        extra="allow",
+        populate_by_name=True,
+    )
+
+    @field_validator("severity")
+    @classmethod
+    def validate_severity(cls, v: str) -> str:
+        allowed = {"critical", "high", "medium", "low", "info", "unknown"}
+        if v.lower() not in allowed:
+            return "medium"
+        return v.lower()
+
+
 class ScanResult(BaseModel):
     """Result of scanning one target."""
 
@@ -72,12 +98,20 @@ class ScanResult(BaseModel):
         default=None,
         description="Parsed information from an exposed SQL dump",
     )
+    nuclei_findings: List[NucleiFinding] = Field(
+        default_factory=list,
+        description="Validated exploit findings from Nuclei",
+    )
     errors: List[str] = Field(default_factory=list)
     scan_time: datetime = Field(default_factory=datetime.utcnow)
 
     def is_vulnerable(self) -> bool:
         """Return True if any vulnerabilities were found."""
         return len(self.vulns) > 0
+
+    def has_nuclei_confirmations(self) -> bool:
+        """Return True if Nuclei confirmed any exploitable issues."""
+        return len(self.nuclei_findings) > 0
 
     @field_validator("php_version")
     @classmethod
@@ -100,5 +134,6 @@ __all__ = [
     "Vulnerability",
     "ExposedFile",
     "SchemaResult",
+    "NucleiFinding",
     "ScanResult",
 ]
