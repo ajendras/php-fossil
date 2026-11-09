@@ -22,7 +22,7 @@ def parse_sql_dump(content: str) -> SchemaResult:
     Handles common mysqldump, phpMyAdmin and manual backup formats.
     Gracefully degrades on malformed or non-SQL content. Improved regexes
     ensure all tables/columns are captured even with complex column defs
-    (enums, decimals, etc.).
+    (enums, decimals, INTEGER, JSON, etc.).
 
     Args:
         content: Full text content of a .sql file.
@@ -36,9 +36,11 @@ def parse_sql_dump(content: str) -> SchemaResult:
     if len(content.strip()) < 20:
         return SchemaResult()
 
-    # More precise table detection that requires opening parenthesis
+    # More permissive table detection supporting newlines, quotes and
+    # optional parentheses or AS/LIKE clauses.
     table_pattern = re.compile(
-        r"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"']?(\w+)[`\"']?\s*\(",
+        r"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"']?(\w+)[`\"']?(?:\s*\(|\s+)",
+        re.DOTALL | re.MULTILINE,
     )
     tables = table_pattern.findall(content)
     unique_tables = list(dict.fromkeys(tables))  # preserve first-seen order
@@ -56,10 +58,12 @@ def parse_sql_dump(content: str) -> SchemaResult:
         create_match = create_pattern.search(content)
         if create_match:
             col_block = create_match.group(1)
-            # Match column names followed by a datatype (handles backticks, complex types)
+            # Expanded datatype list to handle INTEGER, JSON, BOOLEAN, etc.
             col_pattern = re.compile(
-                r"[`\"']?(\w+)[`\"']?\s+(?:tinyint|smallint|int|bigint|varchar|char|text|"
-                r"date|datetime|timestamp|decimal|float|double|enum|set|blob)",
+                r"[`\"']?(\w+)[`\"']?\s+(?:tinyint|smallint|mediumint|int|integer|bigint|float|"
+                r"double|decimal|numeric|date|time|datetime|timestamp|year|char|varchar|binary|"
+                r"varbinary|tinyblob|blob|mediumblob|longblob|tinytext|text|mediumtext|longtext|"
+                r"enum|set|json|bool|boolean)",
                 re.IGNORECASE,
             )
             col_names = col_pattern.findall(col_block)
