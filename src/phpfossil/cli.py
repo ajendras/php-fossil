@@ -97,7 +97,8 @@ def scan(
     }
 
     console.print(f"[bold blue]Scanning {len(targets)} target(s) (concurrency={concurrency}, nuclei={nuclei})...[/]")
-    results = scan_targets(targets, config=config)
+    # Run the async scanner within the CLI's synchronous context
+    results = asyncio.run(scan_targets(targets, config=config))
 
     # Persist raw results
     json_data = [r.model_dump(mode="json") for r in results]
@@ -173,7 +174,7 @@ def cmd_list(
 ) -> None:
     """Manage a local prioritized list of at-risk domains."""
     if not list_file.parent.exists():
-        list_file.parent.mkdir(parents=True, exist_ok=True)
+        list_file.mkdir(parents=True, exist_ok=True)
 
     if list_file.exists():
         try:

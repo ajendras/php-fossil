@@ -178,7 +178,7 @@ def _validate_proxies(proxies: Any) -> List[str]:
     return cleaned
 
 
-def scan_targets(
+async def scan_targets(
     targets: List[str], config: Optional[Dict[str, Any]] = None
 ) -> List[ScanResult]:
     """Scan a list of targets concurrently and return ScanResult objects.
@@ -190,7 +190,9 @@ def scan_targets(
     """
     if not isinstance(targets, list) or not targets:
         raise ValueError("targets must be a non-empty list of URL strings")
-    if any(not isinstance(t, str) or not t.startswith(("http://", "https://")) for t in targets):
+    if any(
+        not isinstance(t, str) or not t.startswith(("http://", "https://")) for t in targets
+    ):
         raise ValueError("All targets must be valid http/https URLs")
 
     config = config or {}
@@ -199,18 +201,15 @@ def scan_targets(
     # Proxy handling
     proxy_list = _validate_proxies(config.get("proxies"))
 
-    async def _run() -> List[ScanResult]:
-        semaphore = asyncio.Semaphore(max_concurrency)
+    semaphore = asyncio.Semaphore(max_concurrency)
 
-        async def bounded_probe(t: str, idx: int) -> ScanResult:
-            async with semaphore:
-                proxy_url = proxy_list[idx % len(proxy_list)] if proxy_list else None
-                return await _probe_target(t, config, proxy_url)
+    async def bounded_probe(t: str, idx: int) -> ScanResult:
+        async with semaphore:
+            proxy_url = proxy_list[idx % len(proxy_list)] if proxy_list else None
+            return await _probe_target(t, config, proxy_url)
 
-        tasks = [bounded_probe(t, i) for i, t in enumerate(targets)]
-        return await asyncio.gather(*tasks)
-
-    results = asyncio.run(_run())
+    tasks = [bounded_probe(t, i) for i, t in enumerate(targets)]
+    results = await asyncio.gather(*tasks)
 
     # Post-process with Nuclei when enabled (only on targets with vulns)
     if config.get("use_nuclei", False):
@@ -223,7 +222,9 @@ def scan_targets(
                         timeout=config.get("timeout", 15),
                     )
                     result.nuclei_findings = nuclei_results
-                    if any(n for n in nuclei_results if not n.template.startswith("error")):
+                    if any(
+                        n for n in nuclei_results if not n.template.startswith("error")
+                    ):
                         result.detected_from.append("nuclei")
                 except Exception as exc:  # noqa: BLE001
                     result.errors.append(f"Nuclei error: {exc}")
