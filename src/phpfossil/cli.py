@@ -18,6 +18,7 @@ from phpfossil import (
     scan_targets,
     ScanResult,
     store_results,
+    run_tui,
 )
 
 app = typer.Typer(
@@ -230,6 +231,14 @@ def cmd_list(
             console.print("[yellow]List cleared.[/]")
     else:
         console.print("[red]Unknown action. Use: show, add, or clear.[/]")
+
+
+@app.command("tui")
+def cmd_tui() -> None:
+    """Launch interactive Textual TUI for live scanning with real-time updates."""
+    console.print("[bold cyan]Starting PHP Fossil Interactive TUI...[/]")
+    console.print("[dim]Use s to start scan, r to reset, d for report, q to quit.[/]")
+    run_tui()
 
 
 if __name__ == "__main__":

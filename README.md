@@ -77,6 +77,14 @@ Concurrent, rate-limited scans with `scan_targets()` and configurable limits
 Local Ollama generates executive summaries, risk ratings and remediation advice
 </td>
 </tr>
+<tr>
+<td>
+🖥️ <b>Interactive TUI</b><br>
+Real-time terminal UI with live result updates, config toggles, keyboard shortcuts and rich logging using Textual
+</td>
+<td></td>
+<td></td>
+</tr>
 </table>
 
 **Persistent History** — Every scan is automatically saved to a local SQLite database (`~/.phpfossil/history.db`). Review and query past results with the `history` CLI command or `get_historical_results()`.
@@ -148,6 +156,14 @@ php-fossil dorks --version 7.4 --count 20 --save dorks.txt
 php-fossil scan -f targets.txt --concurrency 25 --timeout 10 --nuclei --ollama --html report.html
 ```
 
+**Launch the interactive live TUI:**
+
+```bash
+php-fossil tui
+```
+
+The TUI provides a real-time table that updates as each target is fingerprinted, a live log panel, toggles for Nuclei/Ollama, and keyboard shortcuts (`s`=start scan, `r`=reset table, `d`=dump report, `q`=quit).
+
 **View historical scans from the persistent store:**
 
 ```bash
@@ -173,17 +189,21 @@ php-fossil list show
 
 ```python
 import asyncio
-from phpfossil import generate_dorks, scan_targets, generate_report, get_historical_results, validate_with_nuclei, generate_summary
+from phpfossil import generate_dorks, scan_targets, generate_report, get_historical_results, validate_with_nuclei, generate_summary, run_tui
 from phpfossil.models import ScanResult, Vulnerability
 
 # Custom dork generation
 dorks = generate_dorks("8.0", count=12)
 print(dorks[0])  # e.g. intitle:"phpinfo()" "PHP Version 8.0"
 
-# Direct scan with Nuclei + Ollama
+# Direct scan with Nuclei + Ollama (callback supported for live UIs)
+def live_callback(result: ScanResult):
+    print(f"Live: {result.url} → {result.php_version} ({len(result.vulns)} vulns)")
+
 results: list[ScanResult] = asyncio.run(scan_targets(
     ["https://httpbin.org"],
-    config={"use_nuclei": True, "use_ollama": True, "ollama_model": "llama3"}
+    config={"use_nuclei": True, "use_ollama": True, "ollama_model": "llama3"},
+    callback=live_callback
 ))
 for r in results:
     if r.is_vulnerable():
@@ -200,6 +220,9 @@ if results and results[0].llm_summary:
 # Standalone summary
 summary = generate_summary(results, model="llama3")
 print(summary)
+
+# Launch the TUI from code
+# run_tui()
 ```
 
 </details>
@@ -232,7 +255,7 @@ print(version)  # 7.4.33
 | ollama_model      | llama3  | Ollama model name to use for summarization |
 | db_path           | ~/.phpfossil/history.db | Path to persistent SQLite database for scan history |
 
-These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency`, `--timeout`, `--nuclei` and `--ollama`. Proxy rotation and Nuclei are currently only available through the library API and the new `--nuclei` flag; future CLI enhancements will expand options. The SQLite store is used automatically by `scan` and `history` commands. Ollama summaries appear in terminal reports and the HTML overview when enabled.
+These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency`, `--timeout`, `--nuclei` and `--ollama`. In the TUI the concurrency is automatically lowered to 5 for smoother live updates. Proxy rotation and Nuclei are currently only available through the library API and the new `--nuclei` flag; future CLI enhancements will expand options. The SQLite store is used automatically by `scan` and `history` commands. Ollama summaries appear in terminal reports and the HTML overview when enabled. The new TUI respects all config options via its switches.
 
 ## 🧩 Architecture
 
@@ -248,21 +271,23 @@ flowchart TD
     API --> Search[search.py]
     API --> Reporter[reporter.py]
     API --> Store[store.py]
+    API --> TUI[tui.py]
     Reporter --> HTML[Jinja2]
     Scanner --> Models[models.py]
     Models --> Pydantic[Validation]
+    TUI --> Scanner
 ```
 
-PHP Fossil follows a clean, modular architecture. The public API in `__init__.py` (`scan_targets`, `generate_dorks`, `generate_report`, `store_results`, `get_historical_results`, `validate_with_nuclei`, `generate_summary`) orchestrates everything. `AsyncScanner` uses a rate-limited `httpx.AsyncClient` and delegates to specialized modules for fingerprinting, vulnerability lookup, schema extraction, Nuclei validation, Ollama summarization and reporting. All data flows through validated Pydantic models (`ScanResult`, `Vulnerability`, `SchemaResult`, `ExposedFile`, `NucleiFinding`). Scans are automatically persisted to SQLite via the `Store`.
+PHP Fossil follows a clean, modular architecture. The public API in `__init__.py` (`scan_targets`, `generate_dorks`, `generate_report`, `store_results`, `get_historical_results`, `validate_with_nuclei`, `generate_summary`, `run_tui`) orchestrates everything. `AsyncScanner` uses a rate-limited `httpx.AsyncClient` and delegates to specialized modules for fingerprinting, vulnerability lookup, schema extraction, Nuclei validation, Ollama summarization and reporting. The new `PHPFossilTUI` uses Textual widgets and the scanner's live callback to provide real-time updates. All data flows through validated Pydantic models (`ScanResult`, `Vulnerability`, `SchemaResult`, `ExposedFile`, `NucleiFinding`). Scans are automatically persisted to SQLite via the `Store`.
 
 ## 📁 Project structure
 
 ```text
 src/phpfossil/
 ├── __init__.py          # Public API, models, scan_targets, generate_dorks, generate_report
-├── cli.py               # Typer commands: scan, dorks, report, list, history
+├── cli.py               # Typer commands: scan, dorks, report, list, history, tui
 ├── models.py            # Pydantic models (ScanResult, Vulnerability, SchemaResult, ExposedFile, NucleiFinding)
-├── scanner.py           # Async scanning, _probe_target, rate limiting, proxy rotation, Nuclei/Ollama post-processing
+├── scanner.py           # Async scanning, _probe_target, rate limiting, proxy rotation, Nuclei/Ollama post-processing + live callback
 ├── fingerprinter.py     # detect_from_headers, detect_from_body, detect_from_phpinfo, detect_from_error_page
 ├── vulndb.py            # _get_embedded_vulndb, get_vulns_for_version
 ├── schema.py            # parse_sql_dump, locate_sql_urls
@@ -270,6 +295,7 @@ src/phpfossil/
 ├── ollama.py            # Local LLM summaries via Ollama REST API (no extra deps)
 ├── search.py            # DorkGenerator with 18 templates
 ├── reporter.py          # ReportGenerator.to_terminal, to_html + default Jinja template
+├── tui.py               # Interactive Textual TUI for live scanning with real-time table updates
 ├── store.py             # Persistent SQLite store with automatic history tracking
 └── pyproject.toml       # Dependencies, console script entrypoint
 
@@ -278,7 +304,7 @@ examples/
 └── custom_dorks.py      # Extending DorkGenerator
 
 tests/
-├── test_scanner.py      # Tests for fingerprinting, async mocks, exposed files, Store, Nuclei, Ollama
+├── test_scanner.py      # Tests for fingerprinting, async mocks, exposed files, Store, Nuclei, Ollama, live callback
 ├── test_vulndb.py       # CVE mapping, severity, EOL checks
 ├── test_fingerprinter_cms.py  # New tests for CMS version detection
 ```
@@ -292,7 +318,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mocks, `parse_sql_dump`, VulnDB lookup, CLI commands, JSON serialization of `ScanResult` objects, the new persistent `Store`, mocked Nuclei validation and the Ollama summarizer (with mocked HTTP calls to localhost:11434).
+Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mocks, `parse_sql_dump`, VulnDB lookup, CLI commands, JSON serialization of `ScanResult` objects, the new persistent `Store`, mocked Nuclei validation and the Ollama summarizer (with mocked HTTP calls to localhost:11434). The TUI live callback path is exercised in `test_scanner.py`.
 
 ## 📍 Roadmap
 
@@ -303,7 +329,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] WordPress/Joomla/Laravel specific version fingerprinting
 - [x] Integration with Nuclei for deeper exploit validation
 - [x] Local LLM (Ollama) summaries of discovered issues
-- [ ] Interactive terminal TUI with textual for live scanning
+- [x] Interactive terminal TUI with textual for live scanning
 - [ ] GitHub Action for scheduled scans of your own domains
 - [ ] CSV export compatible with bug-bounty platforms
 - [ ] Shodan and Censys API modules for passive discovery

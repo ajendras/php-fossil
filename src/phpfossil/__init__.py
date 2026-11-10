@@ -4,7 +4,7 @@ maps vulns, extracts schemas and builds prioritized security lists.
 Public API:
     scan_targets, generate_dorks, generate_report, validate_with_nuclei,
     generate_summary, ScanResult, Vulnerability, NucleiFinding, get_vulns_for_version,
-    parse_sql_dump, store_results, get_historical_results, Store
+    parse_sql_dump, store_results, get_historical_results, Store, run_tui
 """
 
 __version__ = "0.1.0"
@@ -35,6 +35,7 @@ from .fingerprinter import (
 )
 from .nuclei import validate_with_nuclei, NucleiValidator
 from .ollama import generate_summary, is_ollama_available, OllamaSummarizer
+from .tui import run_tui
 
 __all__ = [
     "__version__",
@@ -69,4 +70,6 @@ __all__ = [
     "generate_summary",
     "is_ollama_available",
     "OllamaSummarizer",
+    # TUI
+    "run_tui",
 ]
