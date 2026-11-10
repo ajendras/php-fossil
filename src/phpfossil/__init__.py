@@ -3,7 +3,7 @@ maps vulns, extracts schemas and builds prioritized security lists.
 
 Public API:
     scan_targets, generate_dorks, generate_report, validate_with_nuclei,
-    ScanResult, Vulnerability, NucleiFinding, get_vulns_for_version,
+    generate_summary, ScanResult, Vulnerability, NucleiFinding, get_vulns_for_version,
     parse_sql_dump, store_results, get_historical_results, Store
 """
 
@@ -34,6 +34,7 @@ from .fingerprinter import (
     detect_cms_version,
 )
 from .nuclei import validate_with_nuclei, NucleiValidator
+from .ollama import generate_summary, is_ollama_available, OllamaSummarizer
 
 __all__ = [
     "__version__",
@@ -41,6 +42,7 @@ __all__ = [
     "generate_dorks",
     "generate_report",
     "validate_with_nuclei",
+    "generate_summary",
     "ScanResult",
     "Vulnerability",
     "NucleiFinding",
@@ -63,4 +65,8 @@ __all__ = [
     "detect_cms_version",
     # Nuclei helpers
     "NucleiValidator",
+    # Ollama helpers
+    "generate_summary",
+    "is_ollama_available",
+    "OllamaSummarizer",
 ]

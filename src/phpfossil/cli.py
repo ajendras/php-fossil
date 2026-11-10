@@ -79,6 +79,7 @@ def scan(
     concurrency: Annotated[int, typer.Option("--concurrency", "-c", min=5, max=100)] = 20,
     timeout: Annotated[int, typer.Option("--timeout", min=5, max=60)] = 12,
     nuclei: Annotated[bool, typer.Option("--nuclei", help="Enable Nuclei for deeper exploit validation")] = False,
+    ollama: Annotated[bool, typer.Option("--ollama", help="Enable Local LLM (Ollama) summaries of discovered issues")] = False,
     output: Annotated[Path, typer.Option("--output", "-o")] = Path("phpfossil-results.json"),
     html: Annotated[Optional[Path], typer.Option("--html", help="Path for HTML report")] = None,
 ) -> None:
@@ -95,9 +96,10 @@ def scan(
         "max_concurrency": concurrency,
         "timeout": timeout,
         "use_nuclei": nuclei,
+        "use_ollama": ollama,
     }
 
-    console.print(f"[bold blue]Scanning {len(targets)} target(s) (concurrency={concurrency}, nuclei={nuclei})...[/]")
+    console.print(f"[bold blue]Scanning {len(targets)} target(s) (concurrency={concurrency}, nuclei={nuclei}, ollama={ollama})...[/]")
     # Run the async scanner within the CLI's synchronous context
     results = asyncio.run(scan_targets(targets, config=config))
 
