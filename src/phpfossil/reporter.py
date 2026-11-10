@@ -66,8 +66,8 @@ class ReportGenerator:
             )
             exposed_str = str(len(r.exposed_files))
             schema_str = (
-                f"[bold green]Yes[/] ({len(r.schema.tables)})"
-                if r.schema and r.schema.tables
+                f"[bold green]Yes[/] ({len(r.db_schema.tables)})"
+                if r.db_schema and r.db_schema.tables
                 else "[dim]No[/]"
             )
             nuclei_count = len([f for f in r.nuclei_findings if f.template != "error"])
@@ -111,8 +111,8 @@ class ReportGenerator:
         """Render a modern standalone HTML report.
 
         Uses an inline polished template with dark theme, responsive layout,
-        subtle transitions, accessible labels, severity coloring and an
-        optional Ollama summary card.
+        subtle transitions, accessible labels, severity coloring, a Nuclei column and
+        a conditional Ollama summary card.
         """
         if not isinstance(results, list):
             raise ValueError("results must be a list of ScanResult objects")
@@ -370,9 +370,9 @@ class ReportGenerator:
                         {% endif %}
                     </td>
                     <td>
-                        {% if res.schema and res.schema.tables %}
+                        {% if res.db_schema and res.db_schema.tables %}
                             <span class="tag" style="background:#166534;color:#86efac">
-                                {{ res.schema.tables|length }} tables
+                                {{ res.db_schema.tables|length }} tables
                             </span>
                         {% else %}
                             <span style="opacity:0.5">No</span>

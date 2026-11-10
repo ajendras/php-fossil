@@ -94,7 +94,7 @@ class ScanResult(BaseModel):
     )
     vulns: List[Vulnerability] = Field(default_factory=list)
     exposed_files: List[ExposedFile] = Field(default_factory=list)
-    schema: Optional[SchemaResult] = Field(
+    db_schema: Optional[SchemaResult] = Field(
         default=None,
         description="Parsed information from an exposed SQL dump",
     )
