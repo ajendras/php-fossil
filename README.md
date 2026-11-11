@@ -65,6 +65,10 @@ Saves, filters and exports at-risk domains via the `list` CLI command
 </tr>
 <tr>
 <td>
+📅 <b>GitHub Action</b><br>
+Scheduled weekly scans of your own domains with artifact reports
+</td>
+<td>
 📑 <b>Rich Reports</b><br>
 Terminal tables and beautiful HTML reports via `ReportGenerator`
 </td>
@@ -72,17 +76,16 @@ Terminal tables and beautiful HTML reports via `ReportGenerator`
 ⚡ <b>Async Scanner</b><br>
 Concurrent, rate-limited scans with `scan_targets()` and configurable limits
 </td>
+</tr>
+<tr>
 <td>
 🧠 <b>LLM Summaries</b><br>
 Local Ollama generates executive summaries, risk ratings and remediation advice
 </td>
-</tr>
-<tr>
 <td>
 🖥️ <b>Interactive TUI</b><br>
 Real-time terminal UI with live result updates, config toggles, keyboard shortcuts and rich logging using Textual
 </td>
-<td></td>
 <td></td>
 </tr>
 </table>
@@ -185,6 +188,18 @@ php-fossil list add --url https://legacy.example.com --version 5.6.40
 php-fossil list show
 ```
 
+**Scheduled scans of your own domains (GitHub Action)**
+
+Add the workflow `.github/workflows/scheduled-scan.yml` to your repository (or copy the one from this repo). It installs PHP Fossil and Nuclei, reads a customizable list of domains, runs a scan every Monday, and uploads JSON + HTML reports as workflow artifacts.
+
+Edit the `targets.txt` section inside the workflow with your production and legacy domains. You can also trigger it manually from the **Actions** tab in GitHub.
+
+```bash
+# After the workflow runs, download the "phpfossil-results" artifact
+```
+
+The action respects all existing configuration options (concurrency is limited for CI, Nuclei is enabled, Ollama is omitted because it is not practical in a runner).
+
 <details><summary>Library API usage (advanced)</summary>
 
 ```python
@@ -257,6 +272,8 @@ print(version)  # 7.4.33
 
 These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency`, `--timeout`, `--nuclei` and `--ollama`. In the TUI the concurrency is automatically lowered to 5 for smoother live updates. Proxy rotation and Nuclei are currently only available through the library API and the new `--nuclei` flag; future CLI enhancements will expand options. The SQLite store is used automatically by `scan` and `history` commands. Ollama summaries appear in terminal reports and the HTML overview when enabled. The new TUI respects all config options via its switches.
 
+The scheduled GitHub Action uses a conservative concurrency of 5, always enables Nuclei, and skips Ollama (the fallback message is suppressed by not passing the flag). Edit the embedded `targets.txt` inside the workflow to list your own domains.
+
 ## 🧩 Architecture
 
 ```mermaid
@@ -283,6 +300,10 @@ PHP Fossil follows a clean, modular architecture. The public API in `__init__.py
 ## 📁 Project structure
 
 ```text
+.github/workflows/
+├── ci.yml
+└── scheduled-scan.yml   # Scheduled scans of your own domains (new)
+
 src/phpfossil/
 ├── __init__.py          # Public API, models, scan_targets, generate_dorks, generate_report
 ├── cli.py               # Typer commands: scan, dorks, report, list, history, tui
@@ -330,7 +351,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Integration with Nuclei for deeper exploit validation
 - [x] Local LLM (Ollama) summaries of discovered issues
 - [x] Interactive terminal TUI with textual for live scanning
-- [ ] GitHub Action for scheduled scans of your own domains
+- [x] GitHub Action for scheduled scans of your own domains
 - [ ] CSV export compatible with bug-bounty platforms
 - [ ] Shodan and Censys API modules for passive discovery
 - [ ] Community fingerprint repository loader
