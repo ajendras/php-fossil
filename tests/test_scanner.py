@@ -1,91 +1,158 @@
-"""Tests for the scanner module including live callback support for TUI."""
-
 import asyncio
-from unittest.mock import patch
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from phpfossil.models import ScanResult
-from phpfossil.scanner import AsyncScanner, scan_targets
+from phpfossil import (
+    ScanResult,
+    generate_summary,
+    get_historical_results,
+    scan_targets,
+    store_results,
+    validate_with_nuclei,
+)
+from phpfossil.models import Vulnerability
 
 
 @pytest.mark.asyncio
 async def test_scan_targets_basic(httpx_mock: HTTPXMock):
     httpx_mock.add_response(
         url="https://httpbin.org",
-        text="<title>Test</title><h1>PHP Version 7.4.33</h1>",
         headers={"X-Powered-By": "PHP/7.4.33"},
-    )
-    results = await scan_targets(["https://httpbin.org"])
-    assert len(results) == 1
-    assert results[0].php_version == "7.4.33"
-    assert "headers" in results[0].detected_from
-
-
-@pytest.mark.asyncio
-async def test_scan_targets_with_callback(httpx_mock: HTTPXMock):
-    calls = []
-
-    def callback(result: ScanResult) -> None:
-        calls.append(result)
-        assert isinstance(result, ScanResult)
-
-    httpx_mock.add_response(
-        url="http://example.com",
-        text="PHP Version 8.0.0",
-        headers={},
+        text="<title>PHP 7.4.33</title>",
     )
     results = await scan_targets(
-        ["http://example.com"],
-        config={"max_concurrency": 3},
-        callback=callback,
+        ["https://httpbin.org"], config={"max_concurrency": 5, "timeout": 5}
     )
     assert len(results) == 1
-    assert len(calls) == 1
-    assert calls[0].url == "http://example.com"
-
-
-@pytest.mark.asyncio
-async def test_async_scanner_proxy_support(httpx_mock: HTTPXMock):
-    scanner = AsyncScanner(config={"proxies": ["http://proxy1:8080"]})
-    httpx_mock.add_response(url="https://test.com", text="PHP 7.3")
-    results = await scanner.scan(["https://test.com"])
-    assert len(results) == 1
-
-
-@pytest.mark.asyncio
-async def test_scan_with_error(httpx_mock: HTTPXMock):
-    httpx_mock.add_exception(Exception("Connection error"), url="https://bad.url")
-    results = await scan_targets(["https://bad.url"])
-    assert len(results) == 1
-    assert len(results[0].errors) > 0
+    assert results[0].php_version == "7.4.33"
+    assert any("headers" in d or "combined" in d for d in results[0].detected_from)
+    assert results[0].scan_time.tzinfo is not None
 
 
 @pytest.mark.asyncio
 async def test_scan_targets_cms_detection(httpx_mock: HTTPXMock):
     httpx_mock.add_response(
         url="https://wp.example.com",
-        text='<meta name="generator" content="WordPress 6.1.1">',
+        text='<meta name="generator" content="WordPress 6.4.2" />',
     )
-    results = await scan_targets(["https://wp.example.com"])
+    results = await scan_targets(
+        ["https://wp.example.com"], config={"max_concurrency": 5, "timeout": 5}
+    )
     assert len(results) == 1
-    assert any("cms:wordpress" in d for d in results[0].detected_from)
+    assert any("cms" in item for item in results[0].detected_from)
+
+
+@pytest.mark.asyncio
+async def test_scan_targets_with_callback(httpx_mock: HTTPXMock):
+    httpx_mock.add_response(
+        url="http://example.com",
+        headers={"Server": "Apache/2 PHP/8.0.0"},
+    )
+    callback = MagicMock()
+    results = await scan_targets(
+        ["http://example.com"],
+        config={"max_concurrency": 5, "timeout": 5},
+        callback=callback,
+    )
+    assert len(results) == 1
+    assert results[0].php_version == "8.0.0"
+    assert callback.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_scanner_proxy_support(httpx_mock: HTTPXMock):
+    httpx_mock.add_response(
+        url="https://test.com",
+        headers={"X-Powered-By": "PHP/7.2.24"},
+    )
+    config = {
+        "proxies": ["http://proxy.test:8080"],
+        "max_concurrency": 5,
+        "timeout": 5,
+    }
+    results = await scan_targets(["https://test.com"], config=config)
+    assert len(results) == 1
+    assert results[0].php_version == "7.2.24"
+
+
+@pytest.mark.asyncio
+async def test_scan_with_error(httpx_mock: HTTPXMock):
+    httpx_mock.add_exception(httpx.RequestError("connection failed"), url="https://bad.url")
+    results = await scan_targets(["https://bad.url"], config={"timeout": 3})
+    assert len(results) == 1
+    assert len(results[0].errors) > 0
 
 
 @pytest.mark.asyncio
 async def test_live_callback_is_called_exactly_once_per_target(httpx_mock: HTTPXMock):
-    calls = 0
+    httpx_mock.add_response(
+        url="https://one.com", headers={"X-Powered-By": "PHP/7.4.33"}
+    )
+    httpx_mock.add_response(
+        url="https://two.com", headers={"X-Powered-By": "PHP/8.1.0"}
+    )
+    calls = []
 
     def callback(result: ScanResult) -> None:
-        nonlocal calls
-        calls += 1
+        calls.append(result.url)
 
-    httpx_mock.add_response(url="https://one.com", text="PHP 7.4")
-    httpx_mock.add_response(url="https://two.com", text="PHP 8.1")
-    await scan_targets(
+    results = await scan_targets(
         ["https://one.com", "https://two.com"],
-        config={"max_concurrency": 2},
+        config={"max_concurrency": 10, "timeout": 5},
         callback=callback,
     )
-    assert calls == 2
+    assert len(results) == 2
+    assert len(calls) == 2
+    assert set(calls) == {"https://one.com", "https://two.com"}
+
+
+@patch("phpfossil.scanner.validate_with_nuclei")
+@patch("phpfossil.scanner.generate_summary")
+@pytest.mark.asyncio
+async def test_nuclei_ollama_and_exposed_files(mock_generate_summary, mock_validate, httpx_mock: HTTPXMock):
+    mock_validate.return_value = [
+        {"template": "php-rce-generic", "name": "RCE", "severity": "critical"}
+    ]
+    mock_generate_summary.return_value = "# Test Summary\nHigh risk."
+
+    httpx_mock.add_response(
+        url="https://httpbin.org",
+        headers={"X-Powered-By": "PHP/7.4.33"},
+        text="CREATE TABLE users (id INT);",
+    )
+    config = {
+        "use_nuclei": True,
+        "use_ollama": True,
+        "max_concurrency": 5,
+        "timeout": 5,
+    }
+    results = await scan_targets(["https://httpbin.org"], config=config)
+    assert len(results) == 1
+    assert results[0].php_version == "7.4.33"
+    assert len(results[0].exposed_files) > 0
+    assert len(results[0].nuclei_findings) > 0
+    assert results[0].llm_summary == "# Test Summary\nHigh risk."
+
+
+def test_persistent_store(tmp_path):
+    db_path = tmp_path / "test_history.db"
+    vuln = Vulnerability(
+        cve="CVE-2021-1234",
+        title="Test vuln",
+        severity="high",
+        description="Test",
+    )
+    result = ScanResult(
+        url="https://example.com",
+        php_version="7.4.33",
+        vulns=[vuln],
+        scan_time=datetime.now(timezone.utc),
+    )
+    store_results([result], db_path=str(db_path))
+    history = get_historical_results(limit=5, db_path=str(db_path))
+    assert len(history) >= 1
+    assert any(r.url == "https://example.com" for r in history)

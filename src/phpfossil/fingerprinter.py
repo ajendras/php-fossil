@@ -8,11 +8,13 @@ import re
 from typing import Dict, Optional, Tuple
 
 
-def detect_from_headers(headers: Dict[str, str]) -> Optional[str]:
+def detect_from_headers(headers: Optional[Dict[str, str]] = None) -> Optional[str]:
     """Detect PHP version from response headers.
 
     Prioritises X-Powered-By then Server header. Returns None if
     no version string is found or headers are empty.
+
+    Supports both plain dicts and httpx.Headers (which are not isinstance(dict)).
 
     Args:
         headers: HTTP response headers (case-insensitive lookup).
@@ -20,7 +22,7 @@ def detect_from_headers(headers: Dict[str, str]) -> Optional[str]:
     Returns:
         Detected version string (e.g. '7.4.33') or None.
     """
-    if not headers or not isinstance(headers, dict):
+    if not headers:
         return None
 
     powered_by = (
