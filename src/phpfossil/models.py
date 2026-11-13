@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 
 class Vulnerability(BaseModel):
@@ -116,6 +116,62 @@ class ScanResult(BaseModel):
     def has_nuclei_confirmations(self) -> bool:
         """Return True if Nuclei confirmed any exploitable issues."""
         return len(self.nuclei_findings) > 0
+
+    @computed_field
+    @property
+    def risk_score(self) -> int:
+        """0-100 risk score. Increases significantly when sensitive database
+        schemas (users, payments, admin tables, large row counts) are exposed.
+        """
+        score = 0
+
+        # Vulnerability contribution
+        severity_map = {
+            "critical": 35,
+            "high": 25,
+            "medium": 15,
+            "low": 5,
+        }
+        for vuln in self.vulns:
+            score += severity_map.get(vuln.severity, 15)
+
+        # Nuclei confirmation bonus
+        high_nuclei = sum(
+            1
+            for f in self.nuclei_findings
+            if f.severity in ("critical", "high")
+        )
+        score += high_nuclei * 12
+
+        # Exposed schema sensitivity
+        if self.db_schema is not None and self.db_schema.tables:
+            sensitive_patterns = {
+                "user", "admin", "login", "password", "passwd", "credential",
+                "account", "payment", "card", "ccnum", "order", "customer",
+                "personal", "private", "secret", "config", "email", "auth",
+            }
+            sensitive_count = 0
+            for table_name in self.db_schema.tables:
+                lower_name = table_name.lower()
+                for pattern in sensitive_patterns:
+                    if pattern in lower_name:
+                        sensitive_count += 1
+                        break
+            if sensitive_count > 0:
+                score += 20 + (sensitive_count * 8)
+
+            # Row count sensitivity
+            if self.db_schema.row_counts:
+                large_tables = sum(
+                    1 for count in self.db_schema.row_counts.values() if count > 500
+                )
+                score += large_tables * 7
+
+        # Minimum score if vulnerable or schema exposed
+        if self.is_vulnerable() or (self.db_schema and self.db_schema.tables):
+            score = max(score, 35)
+
+        return min(score, 100)
 
     @field_validator("php_version")
     @classmethod

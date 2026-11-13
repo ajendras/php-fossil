@@ -26,7 +26,7 @@ Countless sites still run unsupported PHP versions (pre-8.1) riddled with known 
 - **Targeted discovery** — `generate_dorks()` produces precise Google/Bing/Shodan dorks for specific PHP versions and signatures
 - **Accurate fingerprinting** — Multi-vector detection via `detect_from_headers()`, `detect_from_body()`, `detect_from_phpinfo()` and error-page fallbacks
 - **Built-in intelligence** — Embedded VulnDB with 180+ CVEs, severity ratings, fix versions and references via `get_vulns_for_version()`
-- **Actionable output** — `ScanResult` objects feed rich terminal tables, interactive HTML reports, JSON exports and prioritized at-risk lists
+- **Actionable output** — `ScanResult` objects feed rich terminal tables (with risk scores), interactive HTML reports, JSON exports and prioritized at-risk lists
 
 ## 🎬 Demo
 
@@ -86,7 +86,10 @@ Local Ollama generates executive summaries, risk ratings and remediation advice
 🖥️ <b>Interactive TUI</b><br>
 Real-time terminal UI with live result updates, config toggles, keyboard shortcuts and rich logging using Textual
 </td>
-<td></td>
+<td>
+🔢 <b>Severity Scoring</b><br>
+Computed risk score (0-100) that factors in exposed schema sensitivity for better prioritization
+</td>
 </tr>
 </table>
 
@@ -222,7 +225,7 @@ results: list[ScanResult] = asyncio.run(scan_targets(
 ))
 for r in results:
     if r.is_vulnerable():
-        print(f"{r.url} → {r.php_version} ({len(r.vulns)} vulns, {len(r.nuclei_findings)} confirmed)")
+        print(f"{r.url} → {r.php_version} ({len(r.vulns)} vulns, {len(r.nuclei_findings)} confirmed, risk={r.risk_score})")
         for v in r.vulns:
             print(f"  • {v.cve} ({v.severity})")
     for f in r.nuclei_findings:
@@ -355,7 +358,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [ ] CSV export compatible with bug-bounty platforms
 - [ ] Shodan and Censys API modules for passive discovery
 - [ ] Community fingerprint repository loader
-- [ ] Severity scoring that factors in exposed schema sensitivity
+- [x] Severity scoring that factors in exposed schema sensitivity
 - [ ] Dark-mode HTML report with sortable vulnerability table
 
 > 🤖 This roadmap is worked through continuously — ideas and PRs welcome!

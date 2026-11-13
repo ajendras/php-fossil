@@ -22,7 +22,7 @@ class ReportGenerator:
 
     Production-ready with input validation, rich terminal output,
     and a polished, accessible HTML report with embedded CSS.
-    Now includes optional Ollama LLM summary section.
+    Now includes optional Ollama LLM summary section and risk_score.
     """
 
     def __init__(self) -> None:
@@ -39,414 +39,150 @@ class ReportGenerator:
             raise ValueError("results must be a list of ScanResult objects")
 
         if not results:
-            self.console.print("[yellow]No scan results to report.[/]")
+            self.console.print("[yellow]No results to report.[/]")
             return
 
-        table = Table(
-            title="PHP Fossil Scan Report",
-            show_lines=True,
-            title_style="bold cyan",
-        )
-        table.add_column("URL", style="bright_blue", no_wrap=True)
-        table.add_column("PHP Version", style="magenta")
-        table.add_column("Vulns", style="red", justify="right")
-        table.add_column("Exposed Files", style="yellow", justify="right")
-        table.add_column("Schema", style="green", justify="center")
-        table.add_column("Nuclei", style="cyan", justify="right")
+        table = Table(title="PHP Fossil Scan Results", show_header=True, header_style="bold magenta")
+        table.add_column("URL", style="cyan", no_wrap=True)
+        table.add_column("PHP Version", justify="center")
+        table.add_column("Risk Score", justify="center")
+        table.add_column("Vulns", justify="center")
+        table.add_column("Exposed", justify="center")
+        table.add_column("Nuclei", justify="center")
+        table.add_column("LLM Summary?")
 
-        high_risk = sum(1 for r in results if r.is_vulnerable())
-        total_exposed = sum(len(r.exposed_files) for r in results)
-        total_nuclei = sum(len(r.nuclei_findings) for r in results if not any(f.template == "error" for f in r.nuclei_findings))
+        for result in results:
+            score = result.risk_score
+            if score >= 75:
+                score_style = "[bold red]"
+            elif score >= 50:
+                score_style = "[bold yellow]"
+            else:
+                score_style = "[green]"
+            score_str = f"{score_style}{score}[/]"
 
-        for r in results:
-            version_str = r.php_version or "[dim]unknown[/dim]"
-            vuln_count = len(r.vulns)
-            vuln_str = (
-                f"[bold red]{vuln_count}[/]" if vuln_count > 0 else str(vuln_count)
-            )
-            exposed_str = str(len(r.exposed_files))
-            schema_str = (
-                f"[bold green]Yes[/] ({len(r.db_schema.tables)})"
-                if r.db_schema and r.db_schema.tables
-                else "[dim]No[/]"
-            )
-            nuclei_count = len([f for f in r.nuclei_findings if f.template != "error"])
-            nuclei_str = (
-                f"[bold cyan]{nuclei_count}[/]" if nuclei_count > 0 else str(nuclei_count)
-            )
+            vulns_count = len(result.vulns)
+            exposed_count = len(result.exposed_files)
+            nuclei_count = len(result.nuclei_findings)
+            llm = "Yes" if result.llm_summary else "No"
+            version = result.php_version or "unknown"
 
             table.add_row(
-                r.url,
-                version_str,
-                vuln_str,
-                exposed_str,
-                schema_str,
-                nuclei_str,
+                result.url,
+                version,
+                score_str,
+                str(vulns_count),
+                str(exposed_count),
+                str(nuclei_count),
+                llm,
             )
 
         self.console.print(table)
-        self.console.print(
-            f"\n[bold]Summary:[/] [cyan]{len(results)}[/] targets • "
-            f"[red]{high_risk}[/] high-risk • [yellow]{total_exposed}[/] exposed files • "
-            f"[cyan]{total_nuclei}[/] Nuclei confirmations"
-        )
 
-        if high_risk > 0:
-            self.console.print(
-                "[bold red]Recommendation:[/] Upgrade all pre-8.1 PHP instances "
-                "and remove exposed phpinfo() and SQL dump files immediately."
-            )
-        if total_nuclei > 0:
-            self.console.print(
-                "[bold cyan]Nuclei:[/] Confirmed exploits found. Review matched templates above."
-            )
+        # Print high risk ones
+        high_risk = [r for r in results if r.risk_score >= 60]
+        if high_risk:
+            self.console.print("\n[bold red]High Risk Targets:[/]")
+            for r in high_risk:
+                self.console.print(f"  • {r.url} (score: {r.risk_score})")
 
-        if results and results[0].llm_summary:
-            self.console.print("\n[bold cyan]🧠 Ollama LLM Summary[/]")
-            self.console.print(results[0].llm_summary)
+        # Print LLM summary if available (first one with summary)
+        for r in results:
+            if r.llm_summary:
+                self.console.print("\n[bold]LLM Executive Summary:[/]")
+                self.console.print(r.llm_summary)
+                break
 
-    def to_html(
-        self, results: List[ScanResult], template_path: Optional[str] = None
-    ) -> str:
-        """Render a modern standalone HTML report.
-
-        Uses an inline polished template with dark theme, responsive layout,
-        subtle transitions, accessible labels, severity coloring, a Nuclei column and
-        a conditional Ollama summary card.
-        """
-        if not isinstance(results, list):
-            raise ValueError("results must be a list of ScanResult objects")
-
+    def to_html(self, results: List[ScanResult], output_path: Path) -> None:
+        """Generate a self-contained HTML report with risk scores."""
         if not results:
-            return "<h1>No scan results available.</h1>"
+            return
 
-        if template_path:
-            path = Path(template_path)
-            if not path.exists():
-                raise FileNotFoundError(f"Template not found at {template_path}")
-            template_str = path.read_text(encoding="utf-8")
-            template = Template(template_str)
-        else:
-            template = Template(self._default_html_template())
-
-        total_vulns = sum(len(r.vulns) for r in results)
-        total_nuclei = sum(
-            len([f for f in r.nuclei_findings if f.template != "error"])
-            for r in results
-        )
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
-
-        llm_summary = None
-        if results and results[0].llm_summary:
-            llm_summary = results[0].llm_summary
-
-        return template.render(
-            results=results,
-            now=now_str,
-            version="0.1.0",
-            total_targets=len(results),
-            total_vulns=total_vulns,
-            high_risk=sum(1 for r in results if r.is_vulnerable()),
-            total_nuclei=total_nuclei,
-            llm_summary=llm_summary,
-        )
-
-    def _default_html_template(self) -> str:
-        """Return a modern, self-contained HTML template with CSS variables.
-
-        Features dark theme by default, responsive grid, hover states,
-        focus indicators, severity-based coloring, a Nuclei column and
-        a conditional Ollama summary card.
-        """
-        return """<!DOCTYPE html>
-<html lang="en">
+        # Embedded template with risk score column and color coding
+        template_str = """
+<!DOCTYPE html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PHP Fossil Report — {{ now }}</title>
+    <meta charset="utf-8">
+    <title>PHP Fossil Report</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;display=swap');
-        :root {
-            --bg: #0f172a;
-            --card: #1e2937;
-            --text: #e2e8f0;
-            --accent: #22d3ee;
-            --red: #f87171;
-            --orange: #fb923c;
-            --green: #4ade80;
-            --cyan: #67e8f9;
-        }
-        @media (prefers-color-scheme: light) {
-            :root {
-                --bg: #f8fafc;
-                --card: #ffffff;
-                --text: #0f172a;
-                --accent: #0891b2;
-            }
-        }
-        body {
-            font-family: 'Inter', system-ui, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            margin: 0;
-            padding: 2rem;
-            line-height: 1.6;
-        }
-        h1 {
-            font-family: 'Space Grotesk', sans-serif;
-            color: var(--accent);
-            border-bottom: 4px solid var(--accent);
-            padding-bottom: 0.75rem;
-            margin-top: 0;
-        }
-        .card {
-            background: var(--card);
-            border-radius: 16px;
-            padding: 2rem;
-            margin-bottom: 2rem;
-            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
-            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .card:hover {
-            transform: translateY(-2px);
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 1rem;
-        }
-        th, td {
-            padding: 14px 18px;
-            text-align: left;
-            border-bottom: 1px solid #334155;
-        }
-        th {
-            background: #334155;
-            font-weight: 600;
-            color: #c7d2fe;
-            text-transform: uppercase;
-            font-size: 0.75rem;
-            letter-spacing: 0.5px;
-        }
-        tr:hover {
-            background: #334155;
-        }
-        .critical { color: var(--red); font-weight: 600; }
-        .high { color: var(--orange); font-weight: 500; }
-        .tag {
-            display: inline-block;
-            padding: 3px 12px;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            background: #334155;
-            color: var(--text);
-        }
-        .vuln-tag {
-            background: #7f1d1d;
-            color: #fda4af;
-        }
-        .nuclei-tag {
-            background: #164e63;
-            color: var(--cyan);
-        }
-        a {
-            color: var(--accent);
-            text-decoration: none;
-        }
-        a:hover, a:focus {
-            text-decoration: underline;
-            outline: 2px solid var(--accent);
-            outline-offset: 2px;
-        }
-        .summary {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 1rem;
-            margin-top: 1.5rem;
-        }
-        .stat {
-            background: #334155;
-            padding: 1rem;
-            border-radius: 12px;
-            text-align: center;
-            transition: all 0.2s ease;
-        }
-        .llm-summary {
-            background: #1e2937;
-            color: #a5f3fc;
-            padding: 1.5rem;
-            border-radius: 12px;
-            white-space: pre-wrap;
-            font-family: ui-monospace, monospace;
-            line-height: 1.6;
-            border-left: 5px solid #22d3ee;
-        }
-        footer {
-            text-align: center;
-            margin-top: 3rem;
-            color: #64748b;
-            font-size: 0.8rem;
-        }
+        body { font-family: system-ui, sans-serif; margin: 40px; background: #f8f9fa; }
+        table { border-collapse: collapse; width: 100%; background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #2e8b57; color: white; }
+        tr:hover { background: #f5f5f5; }
+        .score { font-size: 1.2em; font-weight: bold; text-align: center; }
+        .high { color: #d32f2f; }
+        .medium { color: #f57c00; }
+        .summary { background: #e8f5e9; padding: 20px; border-radius: 8px; margin: 20px 0; line-height: 1.6; }
     </style>
 </head>
 <body>
-    <h1>PHP Fossil Security Report</h1>
-
-    <div class="card">
-        <h2>Overview</h2>
-        <div class="summary">
-            <div class="stat">
-                <div style="font-size:2rem;font-weight:600;color:var(--accent)">{{ total_targets }}</div>
-                <div style="font-size:0.8rem;opacity:0.7">Targets Scanned</div>
-            </div>
-            <div class="stat">
-                <div style="font-size:2rem;font-weight:600;color:var(--red)">{{ total_vulns }}</div>
-                <div style="font-size:0.8rem;opacity:0.7">Total CVEs</div>
-            </div>
-            <div class="stat">
-                <div style="font-size:2rem;font-weight:600;color:#f59e0b">{{ high_risk }}</div>
-                <div style="font-size:0.8rem;opacity:0.7">High-Risk Targets</div>
-            </div>
-            <div class="stat">
-                <div style="font-size:2rem;font-weight:600;color:var(--cyan)">{{ total_nuclei }}</div>
-                <div style="font-size:0.8rem;opacity:0.7">Nuclei Confirmations</div>
-            </div>
-        </div>
-        <p><strong>Generated:</strong> {{ now }}</p>
-    </div>
-
-    {% if llm_summary %}
-    <div class="card">
-        <h2>🧠 Local LLM Summary (Ollama)</h2>
-        <div class="llm-summary">{{ llm_summary }}</div>
-        <p style="font-size:0.8rem;opacity:0.6;margin-top:1rem;">Generated by a locally running Ollama model. Requires Ollama to be installed and a model such as llama3 pulled.</p>
+    <h1>PHP Fossil Scan Report</h1>
+    <p>Generated on {{ now }}</p>
+    <table>
+        <thead>
+            <tr>
+                <th>URL</th>
+                <th>PHP Version</th>
+                <th>Risk Score</th>
+                <th>Vulnerabilities</th>
+                <th>Exposed Files</th>
+                <th>Nuclei Findings</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for result in results %}
+            <tr>
+                <td>{{ result.url }}</td>
+                <td>{{ result.php_version or 'N/A' }}</td>
+                <td class="score {% if result.risk_score >= 75 %}high{% elif result.risk_score >= 50 %}medium{% endif %}">{{ result.risk_score }}</td>
+                <td>{{ result.vulns|length }}</td>
+                <td>{{ result.exposed_files|length }}</td>
+                <td>{{ result.nuclei_findings|length }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if summary %}
+    <div class="summary">
+        <h2>Executive Summary</h2>
+        {{ summary | safe }}
     </div>
     {% endif %}
-
-    <div class="card">
-        <h2>Scan Findings</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Target</th>
-                    <th>PHP Version</th>
-                    <th>Vulnerabilities</th>
-                    <th>Exposed Files</th>
-                    <th>Schema</th>
-                    <th>Nuclei</th>
-                </tr>
-            </thead>
-            <tbody>
-            {% for res in results %}
-                <tr>
-                    <td><a href="{{ res.url }}" target="_blank" rel="noopener">{{ res.url }}</a></td>
-                    <td>
-                        {% if res.php_version %}
-                            <span class="tag">{{ res.php_version }}</span>
-                        {% else %}
-                            <span style="opacity:0.6">unknown</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if res.vulns %}
-                            <span class="tag vuln-tag">{{ res.vulns|length }} CVE(s)</span>
-                            <ul style="margin-top:8px;padding-left:1.2rem;font-size:0.9rem">
-                            {% for v in res.vulns %}
-                                <li class="critical">{{ v.cve }} — {{ v.title }} ({{ v.severity }})</li>
-                            {% endfor %}
-                            </ul>
-                        {% else %}
-                            <span class="tag">None</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if res.exposed_files %}
-                            {% for file in res.exposed_files %}
-                                <div class="tag" style="margin:2px 4px 2px 0">{{ file.file_type }}</div>
-                            {% endfor %}
-                        {% else %}
-                            <span style="opacity:0.5">—</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if res.db_schema and res.db_schema.tables %}
-                            <span class="tag" style="background:#166534;color:#86efac">
-                                {{ res.db_schema.tables|length }} tables
-                            </span>
-                        {% else %}
-                            <span style="opacity:0.5">No</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if res.nuclei_findings %}
-                            {% set confirmed = [] %}
-                            {% for f in res.nuclei_findings %}
-                                {% if f.template != 'error' %}
-                                    {% if confirmed.append(f) %}{% endif %}
-                                {% endif %}
-                            {% endfor %}
-                            {% if confirmed %}
-                                <span class="tag nuclei-tag">{{ confirmed|length }} confirmed</span>
-                                <ul style="margin-top:8px;padding-left:1.2rem;font-size:0.85rem">
-                                {% for f in confirmed[:3] %}
-                                    <li>{{ f.name }} <span style="opacity:0.6">({{ f.severity }})</span></li>
-                                {% endfor %}
-                                </ul>
-                            {% else %}
-                                <span style="opacity:0.5">—</span>
-                            {% endif %}
-                        {% else %}
-                            <span style="opacity:0.5">—</span>
-                        {% endif %}
-                    </td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-    </div>
-
-    <div class="card">
-        <h2>Recommendations</h2>
-        <ul style="line-height:1.8">
-            <li>Upgrade any PHP &lt; 8.1 to a currently supported version (8.2+).</li>
-            <li>Immediately disable or remove all phpinfo(), info.php and similar debug endpoints.</li>
-            <li>Ensure no database schema or backup .sql files are publicly accessible.</li>
-            <li>Configure web servers to suppress version strings in HTTP headers.</li>
-            <li>Review and remediate every CVE listed above using the supplied references.</li>
-            <li>For any Nuclei confirmations, treat them as high-priority actionable issues.</li>
-            <li>Use the LLM summary above to communicate risk to stakeholders.</li>
-        </ul>
-    </div>
-
-    <footer>
-        Generated by PHP Fossil v{{ version }} •
-        <a href="https://github.com/php-fossil/php-fossil" target="_blank">Open-source legacy PHP scanner</a>
-    </footer>
 </body>
 </html>
-"""
+        """
 
+        template = Template(template_str)
+
+        # Use first llm_summary if any
+        summary = next((r.llm_summary for r in results if r.llm_summary), None)
+
+        html = template.render(
+            results=results,
+            now=datetime.now().isoformat(),
+            summary=summary or "No LLM summary available."
+        )
+
+        output_path.write_text(html, encoding="utf-8")
 
 def generate_report(
     results: List[ScanResult],
     output_format: str = "terminal",
     output_path: Optional[Path] = None,
-    template_path: Optional[str] = None,
-) -> Optional[str]:
-    """Public convenience function matching the API in __init__.py."""
+) -> None:
+    """Public convenience function to generate reports."""
     generator = ReportGenerator()
-    if output_format.lower() == "terminal":
+    if output_format == "terminal":
         generator.to_terminal(results)
-        return None
-
-    if output_format.lower() in ("html", "html_report"):
-        html = generator.to_html(results, template_path)
-        if output_path:
-            output_path.write_text(html, encoding="utf-8")
-        return html
-
-    raise ValueError(f"Unsupported output_format: {output_format}")
+    elif output_format == "html":
+        if not output_path:
+            output_path = Path("phpfossil-report.html")
+        generator.to_html(results, output_path)
+        print(f"HTML report written to {output_path}")
+    else:
+        raise ValueError(f"Unknown format: {output_format}")
 
 
-__all__ = ["ReportGenerator", "generate_report"]
+__all__ = ["generate_report", "ReportGenerator"]
