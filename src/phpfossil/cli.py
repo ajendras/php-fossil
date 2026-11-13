@@ -83,6 +83,10 @@ def scan(
     ollama: Annotated[bool, typer.Option("--ollama", help="Enable Local LLM (Ollama) summaries of discovered issues")] = False,
     output: Annotated[Path, typer.Option("--output", "-o")] = Path("phpfossil-results.json"),
     html: Annotated[Optional[Path], typer.Option("--html", help="Path for HTML report")] = None,
+    csv: Annotated[
+        Optional[Path],
+        typer.Option("--csv", help="Path for CSV export compatible with bug-bounty platforms"),
+    ] = None,
 ) -> None:
     """Scan targets for legacy PHP versions, exposed files and known CVEs."""
     if file and file.exists():
@@ -118,6 +122,8 @@ def scan(
 
     if html:
         generate_report(results, output_format="html", output_path=html)
+    if csv:
+        generate_report(results, output_format="csv", output_path=csv)
 
     console.print("\n[bold green]Scan completed.[/]")
 
@@ -126,6 +132,10 @@ def scan(
 def report(
     input_file: Annotated[Path, typer.Argument(help="JSON file produced by scan")],
     html: Annotated[Optional[Path], typer.Option("--html", "-h")] = None,
+    csv: Annotated[
+        Optional[Path],
+        typer.Option("--csv", help="Path for CSV export compatible with bug-bounty platforms"),
+    ] = None,
 ) -> None:
     """Re-generate reports from a previous JSON result file."""
     if not input_file.exists():
@@ -138,6 +148,8 @@ def report(
     generate_report(results, output_format="terminal")
     if html:
         generate_report(results, output_format="html", output_path=html)
+    if csv:
+        generate_report(results, output_format="csv", output_path=csv)
 
 
 @app.command("history")

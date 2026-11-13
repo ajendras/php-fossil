@@ -26,7 +26,7 @@ Countless sites still run unsupported PHP versions (pre-8.1) riddled with known 
 - **Targeted discovery** — `generate_dorks()` produces precise Google/Bing/Shodan dorks for specific PHP versions and signatures
 - **Accurate fingerprinting** — Multi-vector detection via `detect_from_headers()`, `detect_from_body()`, `detect_from_phpinfo()` and error-page fallbacks
 - **Built-in intelligence** — Embedded VulnDB with 180+ CVEs, severity ratings, fix versions and references via `get_vulns_for_version()`
-- **Actionable output** — `ScanResult` objects feed rich terminal tables (with risk scores), interactive HTML reports, JSON exports and prioritized at-risk lists
+- **Actionable output** — `ScanResult` objects feed rich terminal tables (with risk scores), interactive HTML reports, JSON exports, CSV exports for bug-bounty platforms and prioritized at-risk lists
 
 ## 🎬 Demo
 
@@ -70,7 +70,7 @@ Scheduled weekly scans of your own domains with artifact reports
 </td>
 <td>
 📑 <b>Rich Reports</b><br>
-Terminal tables and beautiful HTML reports via `ReportGenerator`
+Terminal tables, beautiful HTML reports and CSV exports for bug-bounty platforms via `ReportGenerator`
 </td>
 <td>
 ⚡ <b>Async Scanner</b><br>
@@ -90,6 +90,14 @@ Real-time terminal UI with live result updates, config toggles, keyboard shortcu
 🔢 <b>Severity Scoring</b><br>
 Computed risk score (0-100) that factors in exposed schema sensitivity for better prioritization
 </td>
+</tr>
+<tr>
+<td>
+📤 <b>Bug-Bounty CSV</b><br>
+One-row-per-vulnerability CSV ready for direct import into HackerOne, Bugcrowd and similar platforms
+</td>
+<td></td>
+<td></td>
 </tr>
 </table>
 
@@ -139,6 +147,7 @@ store_results(results)
 
 generate_report(results, output_format="terminal")
 generate_report(results, output_format="html", output_path="report.html")
+generate_report(results, output_format="csv", output_path="bounty.csv")
 
 # retrieve historical scans
 history = get_historical_results(limit=5)
@@ -161,6 +170,15 @@ php-fossil dorks --version 7.4 --count 20 --save dorks.txt
 ```bash
 php-fossil scan -f targets.txt --concurrency 25 --timeout 10 --nuclei --ollama --html report.html
 ```
+
+**Generate CSV for bug-bounty platforms:**
+
+```bash
+php-fossil scan -f targets.txt --csv bounty-import.csv
+php-fossil report phpfossil-results.json --csv hackerone.csv
+```
+
+The resulting CSV contains one row per vulnerability (URL, PHP version, risk score, title, severity, CVE, description, recommendation, reference, etc.) and maps cleanly to the import formats used by HackerOne, Bugcrowd and similar platforms.
 
 **Launch the interactive live TUI:**
 
@@ -201,7 +219,7 @@ Edit the `targets.txt` section inside the workflow with your production and lega
 # After the workflow runs, download the "phpfossil-results" artifact
 ```
 
-The action respects all existing configuration options (concurrency is limited for CI, Nuclei is enabled, Ollama is omitted because it is not practical in a runner).
+The action respects all existing configuration options (concurrency is limited for CI, Nuclei is enabled, and Ollama is omitted because it is not practical in a runner).
 
 <details><summary>Library API usage (advanced)</summary>
 
@@ -238,6 +256,9 @@ if results and results[0].llm_summary:
 # Standalone summary
 summary = generate_summary(results, model="llama3")
 print(summary)
+
+# CSV export for bug-bounty platforms
+generate_report(results, output_format="csv", output_path="bounty.csv")
 
 # Launch the TUI from code
 # run_tui()
@@ -318,7 +339,7 @@ src/phpfossil/
 ├── nuclei.py            # validate_with_nuclei, Nuclei template mapping, subprocess runner
 ├── ollama.py            # Local LLM summaries via Ollama REST API (no extra deps)
 ├── search.py            # DorkGenerator with 18 templates
-├── reporter.py          # ReportGenerator.to_terminal, to_html + default Jinja template
+├── reporter.py          # ReportGenerator.to_terminal, to_html, to_csv + default Jinja template
 ├── tui.py               # Interactive Textual TUI for live scanning with real-time table updates
 ├── store.py             # Persistent SQLite store with automatic history tracking
 └── pyproject.toml       # Dependencies, console script entrypoint
@@ -355,7 +376,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Local LLM (Ollama) summaries of discovered issues
 - [x] Interactive terminal TUI with textual for live scanning
 - [x] GitHub Action for scheduled scans of your own domains
-- [ ] CSV export compatible with bug-bounty platforms
+- [x] CSV export compatible with bug-bounty platforms
 - [ ] Shodan and Censys API modules for passive discovery
 - [ ] Community fingerprint repository loader
 - [x] Severity scoring that factors in exposed schema sensitivity

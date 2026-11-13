@@ -8,7 +8,9 @@ with dark/light mode readiness via CSS variables.
 
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+
+import csv
 
 from jinja2 import Template
 from rich.console import Console
@@ -18,11 +20,11 @@ from .models import NucleiFinding, ScanResult
 
 
 class ReportGenerator:
-    """Generates terminal and HTML reports from lists of ScanResult objects.
+    """Generates terminal, HTML and CSV reports from lists of ScanResult objects.
 
     Production-ready with input validation, rich terminal output,
-    and a polished, accessible HTML report with embedded CSS.
-    Now includes optional Ollama LLM summary section and risk_score.
+    polished HTML and CSV exports optimized for bug-bounty platform
+    imports (one row per vulnerability with clear mapping columns).
     """
 
     def __init__(self) -> None:
@@ -167,6 +169,88 @@ class ReportGenerator:
 
         output_path.write_text(html, encoding="utf-8")
 
+    def to_csv(self, results: List[ScanResult], output_path: Path) -> None:
+        """Export results as CSV optimized for bug-bounty platform imports.
+
+        Produces one row per vulnerability (or a summary row per target
+        when no vulns are present). Column names map directly to common
+        bug-bounty report fields (title, severity, description, recommendation,
+        reference, etc).
+        """
+        if not results:
+            return
+
+        fieldnames = [
+            "URL",
+            "PHP Version",
+            "Risk Score",
+            "Title",
+            "Severity",
+            "CVE",
+            "Description",
+            "Recommendation",
+            "Reference",
+            "Nuclei Confirmed",
+            "Exposed Files",
+        ]
+
+        with output_path.open(mode="w", newline="", encoding="utf-8") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+
+            for result in results:
+                base = {
+                    "URL": result.url,
+                    "PHP Version": result.php_version or "unknown",
+                    "Risk Score": str(result.risk_score),
+                    "Nuclei Confirmed": str(
+                        len([f for f in result.nuclei_findings if f.severity in ("critical", "high")])
+                    ),
+                    "Exposed Files": str(len(result.exposed_files)),
+                }
+
+                if result.vulns:
+                    for vuln in result.vulns:
+                        row: Dict[str, Any] = base.copy()
+                        row.update(
+                            {
+                                "Title": f"{vuln.title} (PHP {result.php_version})",
+                                "Severity": vuln.severity.upper(),
+                                "CVE": vuln.cve,
+                                "Description": vuln.description,
+                                "Recommendation": (
+                                    f"Upgrade PHP beyond {vuln.fixed_in}"
+                                    if vuln.fixed_in
+                                    else "Upgrade to PHP 8.3+ and apply all vendor patches"
+                                ),
+                                "Reference": vuln.reference or "https://www.php.net/supported-versions.php",
+                            }
+                        )
+                        writer.writerow(row)
+                else:
+                    row: Dict[str, Any] = base.copy()
+                    row.update(
+                        {
+                            "Title": (
+                                f"Legacy PHP {result.php_version} Detected"
+                                if result.php_version
+                                else "Target Scanned - No Vulnerabilities"
+                            ),
+                            "Severity": "MEDIUM" if result.php_version and result.php_version.startswith(("5.", "7.")) else "INFO",
+                            "CVE": "N/A",
+                            "Description": (
+                                f"Server is running an end-of-life PHP version ({result.php_version}). "
+                                "Multiple known CVEs exist for this release."
+                                if result.php_version
+                                else "No legacy PHP or vulnerabilities detected."
+                            ),
+                            "Recommendation": "Upgrade to a supported PHP version (8.2 or 8.3)",
+                            "Reference": "https://www.php.net/eol.php",
+                        }
+                    )
+                    writer.writerow(row)
+
+
 def generate_report(
     results: List[ScanResult],
     output_format: str = "terminal",
@@ -181,6 +265,11 @@ def generate_report(
             output_path = Path("phpfossil-report.html")
         generator.to_html(results, output_path)
         print(f"HTML report written to {output_path}")
+    elif output_format == "csv":
+        if not output_path:
+            output_path = Path("phpfossil-bounty.csv")
+        generator.to_csv(results, output_path)
+        print(f"CSV export for bug-bounty platforms written to {output_path}")
     else:
         raise ValueError(f"Unknown format: {output_format}")
 
