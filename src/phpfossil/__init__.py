@@ -11,12 +11,16 @@ Public API:
 CSV output (output_format="csv") produces one row per vulnerability with
 columns suitable for direct import into bug-bounty platforms (HackerOne,
 Bugcrowd, etc).
+
+Community fingerprint repository:
+    load_community_fingerprints(), CommunityFingerprinter, FingerprintRule
 """
 
 __version__ = "0.1.0"
 
 from .models import (
     ExposedFile,
+    FingerprintRule,
     NucleiFinding,
     ScanResult,
     SchemaResult,
@@ -38,6 +42,9 @@ from .fingerprinter import (
     detect_joomla_version,
     detect_laravel_version,
     detect_cms_version,
+    load_community_fingerprints,
+    detect_with_community_rules,
+    CommunityFingerprinter,
 )
 from .nuclei import validate_with_nuclei, NucleiValidator
 from .ollama import generate_summary, is_ollama_available, OllamaSummarizer
@@ -70,6 +77,11 @@ __all__ = [
     "detect_joomla_version",
     "detect_laravel_version",
     "detect_cms_version",
+    # Community fingerprint repository
+    "load_community_fingerprints",
+    "detect_with_community_rules",
+    "CommunityFingerprinter",
+    "FingerprintRule",
     # Nuclei helpers
     "NucleiValidator",
     # Ollama helpers

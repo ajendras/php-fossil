@@ -93,10 +93,13 @@ Computed risk score (0-100) that factors in exposed schema sensitivity for bette
 </tr>
 <tr>
 <td>
+🌐 <b>Community Fingerprints</b><br>
+Loads and applies extensible detection rules from a community JSON repository (with local caching)
+</td>
+<td>
 📤 <b>Bug-Bounty CSV</b><br>
 One-row-per-vulnerability CSV ready for direct import into HackerOne, Bugcrowd and similar platforms
 </td>
-<td></td>
 <td></td>
 </tr>
 </table>
@@ -138,7 +141,8 @@ results = asyncio.run(scan_targets(
         "timeout": 15,
         "use_nuclei": True,
         "use_ollama": True,
-        "ollama_model": "llama3"
+        "ollama_model": "llama3",
+        "use_community_fingerprints": True,
     }
 ))
 
@@ -165,10 +169,10 @@ print(summary)
 php-fossil dorks --version 7.4 --count 20 --save dorks.txt
 ```
 
-**Scan targets from a file with Nuclei and Ollama:**
+**Scan targets from a file with Nuclei and Ollama and community fingerprints:**
 
 ```bash
-php-fossil scan -f targets.txt --concurrency 25 --timeout 10 --nuclei --ollama --html report.html
+php-fossil scan -f targets.txt --concurrency 25 --timeout 10 --nuclei --ollama --community --html report.html
 ```
 
 **Generate CSV for bug-bounty platforms:**
@@ -239,7 +243,7 @@ def live_callback(result: ScanResult):
 # scan_targets is async; wrap with asyncio.run() from sync contexts
 results: list[ScanResult] = asyncio.run(scan_targets(
     ["https://httpbin.org"],
-    config={"use_nuclei": True, "use_ollama": True, "ollama_model": "llama3"},
+    config={"use_nuclei": True, "use_ollama": True, "ollama_model": "llama3", "use_community_fingerprints": True},
     callback=live_callback
 ))
 for r in results:
@@ -283,6 +287,22 @@ print(version)  # 7.4.33
 
 </details>
 
+<details><summary>Community fingerprint loader</summary>
+
+```python
+from phpfossil.fingerprinter import load_community_fingerprints, CommunityFingerprinter
+from phpfossil.models import FingerprintRule
+
+rules = CommunityFingerprinter.load()
+print(f"Loaded {len(rules)} community rules")
+
+# rules can be passed manually or enabled via config={"use_community_fingerprints": True}
+rule = FingerprintRule(type="body", pattern=r"PHP Version[:\s]+(\d+\.\d+\.\d+)", version_group=1)
+print(CommunityFingerprinter.detect(body="Debug: PHP Version: 7.3.12", rules=[rule]))
+```
+
+</details>
+
 ## 🔧 Configuration
 
 | Option            | Default | Description                                      |
@@ -293,9 +313,11 @@ print(version)  # 7.4.33
 | use_nuclei        | false   | Enable Nuclei for deeper exploit validation (requires `nuclei` binary in PATH) |
 | use_ollama        | false   | Enable local Ollama LLM for natural-language summaries of issues (requires Ollama running with a model like llama3) |
 | ollama_model      | llama3  | Ollama model name to use for summarization |
+| use_community_fingerprints | false | Whether to load and apply community-sourced fingerprint rules from a JSON repository |
+| community_repo_url | (official GitHub raw URL) | Custom URL or local path to community fingerprint JSON (array of rule objects) |
 | db_path           | ~/.phpfossil/history.db | Path to persistent SQLite database for scan history |
 
-These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency`, `--timeout`, `--nuclei` and `--ollama`. In the TUI the concurrency is automatically lowered to 5 for smoother live updates. Proxy rotation and Nuclei are currently only available through the library API and the new `--nuclei` flag; future CLI enhancements will expand options. The SQLite store is used automatically by `scan` and `history` commands. Ollama summaries appear in terminal reports and the HTML overview when enabled. The new TUI respects all config options via its switches.
+These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency`, `--timeout`, `--nuclei`, `--ollama` and `--community`. In the TUI the concurrency is automatically lowered to 5 for smoother live updates. Proxy rotation and Nuclei are currently only available through the library API and the new `--nuclei` flag; future CLI enhancements will expand options. The SQLite store is used automatically by `scan` and `history` commands. Ollama summaries appear in terminal reports and the HTML overview when enabled. The new TUI respects all config options via its switches. Community fingerprint rules are cached for 24h in `~/.phpfossil/community_fingerprints.json` and fall back gracefully on network issues.
 
 The scheduled GitHub Action uses a conservative concurrency of 5, always enables Nuclei, and skips Ollama (the fallback message is suppressed by not passing the flag). Edit the embedded `targets.txt` inside the workflow to list your own domains.
 
@@ -379,7 +401,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] GitHub Action for scheduled scans of your own domains
 - [x] CSV export compatible with bug-bounty platforms
 - [ ] Shodan and Censys API modules for passive discovery
-- [ ] Community fingerprint repository loader
+- [x] Community fingerprint repository loader
 - [x] Severity scoring that factors in exposed schema sensitivity
 - [ ] Dark-mode HTML report with sortable vulnerability table
 

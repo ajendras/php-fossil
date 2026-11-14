@@ -81,6 +81,7 @@ def scan(
     timeout: Annotated[int, typer.Option("--timeout", min=5, max=60)] = 12,
     nuclei: Annotated[bool, typer.Option("--nuclei", help="Enable Nuclei for deeper exploit validation")] = False,
     ollama: Annotated[bool, typer.Option("--ollama", help="Enable Local LLM (Ollama) summaries of discovered issues")] = False,
+    community: Annotated[bool, typer.Option("--community", help="Enable community fingerprint repository loader")] = False,
     output: Annotated[Path, typer.Option("--output", "-o")] = Path("phpfossil-results.json"),
     html: Annotated[Optional[Path], typer.Option("--html", help="Path for HTML report")] = None,
     csv: Annotated[
@@ -102,9 +103,10 @@ def scan(
         "timeout": timeout,
         "use_nuclei": nuclei,
         "use_ollama": ollama,
+        "use_community_fingerprints": community,
     }
 
-    console.print(f"[bold blue]Scanning {len(targets)} target(s) (concurrency={concurrency}, nuclei={nuclei}, ollama={ollama})...[/]")
+    console.print(f"[bold blue]Scanning {len(targets)} target(s) (concurrency={concurrency}, nuclei={nuclei}, ollama={ollama}, community={community})...[/]")
     # Run the async scanner within the CLI's synchronous context
     results = asyncio.run(scan_targets(targets, config=config))
 

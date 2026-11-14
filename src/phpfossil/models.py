@@ -77,6 +77,36 @@ class NucleiFinding(BaseModel):
         return v.lower()
 
 
+class FingerprintRule(BaseModel):
+    """Rule for community-sourced version fingerprinting.
+
+    Allows the community to contribute new detection patterns without changing
+    the core code. Rules are loaded from a JSON array at a configurable URL.
+    """
+
+    type: str = Field(
+        ..., description="Detection vector: header, body, phpinfo, error_page"
+    )
+    pattern: str = Field(..., description="Regular expression pattern")
+    version_group: int = Field(
+        1, description="Capturing group index that holds the version string"
+    )
+    cms: Optional[str] = Field(
+        None, description="If set, restricts this rule to a specific CMS"
+    )
+    description: Optional[str] = Field(None, description="Optional description of the rule")
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str) -> str:
+        allowed = {"header", "body", "phpinfo", "error_page"}
+        if v not in allowed:
+            raise ValueError(f"type must be one of {allowed}")
+        return v
+
+
 class ScanResult(BaseModel):
     """Result of scanning one target."""
 
@@ -195,5 +225,6 @@ __all__ = [
     "ExposedFile",
     "SchemaResult",
     "NucleiFinding",
+    "FingerprintRule",
     "ScanResult",
 ]

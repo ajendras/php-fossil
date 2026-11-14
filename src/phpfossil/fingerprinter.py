@@ -145,10 +145,12 @@ def detect_php_version(
     headers: Optional[Dict[str, str]] = None,
     body: str = "",
     phpinfo_content: str = "",
+    community_rules: Optional[List["FingerprintRule"]] = None,
 ) -> Optional[str]:
-    """Convenience combiner: tries headers, phpinfo, then body.
+    """Convenience combiner: tries headers, phpinfo, body then community rules.
 
-    Order reflects reliability of each source. Used by tests.
+    Order reflects reliability of each source. Community rules act as an
+    extensible fallback. Used by tests and the AsyncScanner.
     """
     if headers:
         ver = detect_from_headers(headers)
@@ -160,6 +162,12 @@ def detect_php_version(
             return ver
     if body:
         ver = detect_from_body(body)
+        if ver:
+            return ver
+    if community_rules:
+        ver = detect_with_community_rules(
+            headers=headers, body=body or phpinfo_content, rules=community_rules
+        )
         if ver:
             return ver
     return None
@@ -299,6 +307,167 @@ def detect_cms_version(body: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+# ----------------------------------------------------------------------
+# Community fingerprint repository loader
+# ----------------------------------------------------------------------
+
+import json
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import List
+
+import httpx
+
+from .models import FingerprintRule
+
+
+DEFAULT_COMMUNITY_REPO_URL = (
+    "https://raw.githubusercontent.com/ajendras/php-fossil/main/community-fingerprints.json"
+)
+
+
+FALLBACK_COMMUNITY_RULES = [
+    {
+        "type": "body",
+        "pattern": r"PHP[/\s]?(?P<version>\d+\.\d+(?:\.\d+)?)",
+        "version_group": 1,
+    },
+    {
+        "type": "header",
+        "pattern": r"PHP[/\s]?(?P<version>\d+\.\d+(?:\.\d+)?)",
+        "version_group": 1,
+    },
+    {
+        "type": "error_page",
+        "pattern": r"PHP (?P<version>\d+\.\d+\.\d+)",
+        "version_group": 1,
+    },
+]
+
+
+def load_community_fingerprints(
+    repo_url: Optional[str] = None,
+    cache_ttl_hours: int = 24,
+) -> List[FingerprintRule]:
+    """Load fingerprint rules from a community-maintained JSON repository.
+
+    The repository is expected to be a JSON array of rule objects.
+    Results are cached locally in ~/.phpfossil/community_fingerprints.json
+    for the specified TTL.
+
+    On network or validation error, falls back to a small set of
+    built-in rules.
+
+    Args:
+        repo_url: URL or local path to the fingerprints JSON. Defaults to
+                  the official community repository.
+        cache_ttl_hours: How long to cache the downloaded rules (hours).
+
+    Returns:
+        List of validated FingerprintRule objects.
+    """
+    if repo_url is None:
+        repo_url = DEFAULT_COMMUNITY_REPO_URL
+
+    cache_dir = Path.home() / ".phpfossil"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / "community_fingerprints.json"
+
+    # Use cache if fresh
+    if cache_file.exists():
+        age = datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime)
+        if age < timedelta(hours=cache_ttl_hours):
+            try:
+                data = json.loads(cache_file.read_text(encoding="utf-8"))
+                return [FingerprintRule.model_validate(item) for item in data]
+            except Exception:  # noqa: BLE001
+                pass  # fallthrough to re-fetch
+
+    try:
+        if str(repo_url).startswith(("http://", "https://")):
+            response = httpx.get(repo_url, timeout=8.0, follow_redirects=True)
+            response.raise_for_status()
+            data = response.json()
+        else:
+            data = json.loads(Path(repo_url).read_text(encoding="utf-8"))
+
+        if not isinstance(data, list):
+            data = []
+
+        rules = [FingerprintRule.model_validate(rule) for rule in data]
+
+        # cache successful load
+        cache_file.write_text(
+            json.dumps([r.model_dump(mode="json") for r in rules], indent=2),
+            encoding="utf-8",
+        )
+        return rules
+
+    except Exception:  # noqa: BLE001
+        # fallback
+        return [FingerprintRule.model_validate(r) for r in FALLBACK_COMMUNITY_RULES]
+
+
+def detect_with_community_rules(
+    headers: Optional[Dict[str, str]] = None,
+    body: str = "",
+    rules: Optional[List[FingerprintRule]] = None,
+) -> Optional[str]:
+    """Apply community rules to detect PHP or CMS version.
+
+    Rules are tried in order; first successful match wins.
+    """
+    if not rules or not isinstance(rules, list):
+        return None
+
+    content = body or ""
+
+    for rule in rules:
+        pattern = rule.pattern
+        group = rule.version_group
+
+        if rule.type == "header" and headers:
+            for hval in headers.values():
+                if isinstance(hval, str):
+                    match = re.search(pattern, hval, re.IGNORECASE)
+                    if match:
+                        try:
+                            return match.group(group)
+                        except IndexError:
+                            continue
+        elif rule.type in ("body", "phpinfo", "error_page") and content:
+            flags = re.IGNORECASE | re.DOTALL
+            match = re.search(pattern, content, flags)
+            if match:
+                try:
+                    return match.group(group)
+                except IndexError:
+                    continue
+
+    return None
+
+
+class CommunityFingerprinter:
+    """Wrapper for community fingerprint loading and detection.
+
+    Mirrors the style of NucleiValidator and OllamaSummarizer.
+    """
+
+    @staticmethod
+    def load(repo_url: Optional[str] = None) -> List[FingerprintRule]:
+        """Load rules from the community repository (with caching)."""
+        return load_community_fingerprints(repo_url)
+
+    @staticmethod
+    def detect(
+        headers: Optional[Dict[str, str]] = None,
+        body: str = "",
+        rules: Optional[List[FingerprintRule]] = None,
+    ) -> Optional[str]:
+        """Detect version using loaded community rules."""
+        return detect_with_community_rules(headers, body, rules)
+
+
 __all__ = [
     "detect_from_headers",
     "detect_from_body",
@@ -310,4 +479,8 @@ __all__ = [
     "detect_joomla_version",
     "detect_laravel_version",
     "detect_cms_version",
+    # Community fingerprint repository
+    "load_community_fingerprints",
+    "detect_with_community_rules",
+    "CommunityFingerprinter",
 ]
