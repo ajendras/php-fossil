@@ -236,6 +236,7 @@ print(dorks[0])  # e.g. intitle:"phpinfo()" "PHP Version 8.0"
 def live_callback(result: ScanResult):
     print(f"Live: {result.url} → {result.php_version} ({len(result.vulns)} vulns)")
 
+# scan_targets is async; wrap with asyncio.run() from sync contexts
 results: list[ScanResult] = asyncio.run(scan_targets(
     ["https://httpbin.org"],
     config={"use_nuclei": True, "use_ollama": True, "ollama_model": "llama3"},

@@ -2,7 +2,8 @@
 maps vulns, extracts schemas and builds prioritized security lists.
 
 Public API:
-    scan_targets, generate_dorks, generate_report (supports terminal/html/csv),
+    scan_targets (async — wrap with asyncio.run() from sync code),
+    generate_dorks, generate_report (supports terminal/html/csv),
     validate_with_nuclei, generate_summary, ScanResult, Vulnerability,
     NucleiFinding, get_vulns_for_version, parse_sql_dump, store_results,
     get_historical_results, Store, run_tui

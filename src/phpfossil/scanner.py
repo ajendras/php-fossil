@@ -2,7 +2,7 @@
 
 Handles concurrent scanning of targets with rate limiting via semaphore,
 proxy support, version fingerprinting via multiple vectors, vuln lookup,
-schema extraction, optional Nuclei and Ollama steps, and live callbacks
+schema extraction, optional Nuclei and Ollama post-processing, and live callbacks
 for the TUI. Consistent with the rest of the codebase.
 """
 
@@ -15,14 +15,12 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from .fingerprinter import (
-    detect_cms_version,
-    detect_from_body,
     detect_from_error_page,
     detect_from_headers,
     detect_from_phpinfo,
     detect_php_version,
 )
-from .models import ExposedFile, ScanResult, SchemaResult
+from .models import ExposedFile, ScanResult
 from .nuclei import validate_with_nuclei
 from .ollama import generate_summary
 from .schema import locate_sql_urls, parse_sql_dump
@@ -40,186 +38,183 @@ class AsyncScanner:
         self.use_nuclei = bool(self.config.get("use_nuclei", False))
         self.use_ollama = bool(self.config.get("use_ollama", False))
         self.ollama_model = self.config.get("ollama_model", "llama3")
-        self.client: Optional[httpx.AsyncClient] = None
+
+    async def scan(
+        self,
+        targets: List[str],
+        callback: Optional[Callable[[ScanResult], None]] = None,
+    ) -> List[ScanResult]:
+        """Perform concurrent scan of all targets and apply optional post-processing."""
+        if not targets:
+            return []
+
+        semaphore = asyncio.Semaphore(self.max_concurrency)
+        results: List[ScanResult] = []
+
+        # Choose proxy once per scan (rotation can be extended per-request if needed)
+        proxy = random.choice(self.proxies) if self.proxies else None
+
+        async with httpx.AsyncClient(
+            timeout=self.timeout,
+            follow_redirects=True,
+            proxy=proxy,
+        ) as client:
+            tasks = [
+                asyncio.create_task(
+                    self._probe_target(client, target, semaphore, callback)
+                )
+                for target in targets
+            ]
+            for task in asyncio.as_completed(tasks):
+                result: ScanResult = await task
+                results.append(result)
+
+        # Nuclei validation (runs synchronously but after all HTTP done)
+        if self.use_nuclei:
+            for result in results:
+                if result.php_version or result.vulns:
+                    result.nuclei_findings = validate_with_nuclei(
+                        result.url, result.vulns, timeout=self.timeout
+                    )
+
+        # Ollama summarization (one summary for the whole batch)
+        if self.use_ollama and results:
+            try:
+                summary = generate_summary(results, model=self.ollama_model)
+                for result in results:
+                    result.llm_summary = summary
+            except Exception as exc:  # noqa: BLE001
+                err_msg = f"LLM summary failed: {exc}"
+                for result in results:
+                    result.errors.append(err_msg)
+
+        return results
 
     async def _probe_target(
-        self, url: str, semaphore: asyncio.Semaphore, callback: Optional[Callable[[ScanResult], None]] = None
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        semaphore: asyncio.Semaphore,
+        callback: Optional[Callable[[ScanResult], None]] = None,
     ) -> ScanResult:
-        """Probe a single target with multiple fingerprint vectors and feature steps."""
-        result = ScanResult(url=url.strip())
+        """Single target probing with multiple detection methods and fallback probes."""
         async with semaphore:
+            result = ScanResult(url=url)
             try:
-                proxy = random.choice(self.proxies) if self.proxies else None
-
                 # Primary request
-                resp = await self.client.get(
-                    url, timeout=self.timeout, proxy=proxy, follow_redirects=True
-                )
-                headers = dict(resp.headers)
-                body = await resp.text()
+                probe_url = url if url.endswith(("/", ".php", ".html")) else f"{url}/"
+                response = await client.get(probe_url)
+                headers = dict(response.headers)
+                body = response.text
 
-                version = detect_from_headers(headers)
+                version = detect_php_version(headers=headers, body=body)
                 detected_from: List[str] = []
                 if version:
-                    detected_from.append("headers")
-                else:
-                    version = detect_from_body(body)
-                    if version:
+                    if detect_from_headers(headers):
+                        detected_from.append("headers")
+                    else:
                         detected_from.append("body")
+
+                # phpinfo probe
+                for path in ("/phpinfo.php", "/info.php", "/?phpinfo=1"):
+                    try:
+                        pi_url = url.rstrip("/") + path
+                        pi_resp = await client.get(pi_url)
+                        if pi_resp.status_code < 400:
+                            pi_version = detect_from_phpinfo(
+                                pi_resp.text
+                            ) or detect_from_body(pi_resp.text)
+                            if pi_version:
+                                version = pi_version
+                                detected_from.append("phpinfo")
+                                result.exposed_files.append(
+                                    ExposedFile(
+                                        url=pi_url,
+                                        file_type="phpinfo",
+                                        content_preview=pi_resp.text[:400],
+                                    )
+                                )
+                                break
+                    except httpx.HTTPError:
+                        continue
+
+                # Schema / SQL dump probe
+                sql_candidates = locate_sql_urls(body)
+                if not sql_candidates:
+                    sql_candidates = ["dump.sql", "backup.sql", "database.sql", "schema.sql"]
+                for candidate in sql_candidates[:2]:
+                    try:
+                        sql_url = (
+                            candidate
+                            if candidate.startswith(("http://", "https://"))
+                            else f"{url.rstrip('/')}/{candidate.lstrip('/')}"
+                        )
+                        sql_resp = await client.get(sql_url)
+                        if sql_resp.status_code == 200:
+                            preview = sql_resp.text[:500].lower()
+                            if any(
+                                k in preview
+                                for k in ("table", "insert", "create", "--", "dump")
+                            ):
+                                parsed_schema = parse_sql_dump(sql_resp.text)
+                                result.db_schema = parsed_schema
+                                result.exposed_files.append(
+                                    ExposedFile(
+                                        url=sql_url,
+                                        file_type="sql_dump",
+                                        content_preview=sql_resp.text[:300],
+                                    )
+                                )
+                                break
+                    except httpx.HTTPError:
+                        continue
+
+                # Error-page version leak probe (only if still unknown)
+                if not version:
+                    for i in range(1, 4):
+                        try:
+                            nonce = i * 11111 + 123
+                            err_url = f"{url.rstrip('/')}/nonexistent-{nonce}.php"
+                            err_resp = await client.get(err_url)
+                            err_version = detect_from_error_page(err_resp.text)
+                            if err_version:
+                                version = err_version
+                                detected_from.append("error_page")
+                                break
+                        except httpx.HTTPError:
+                            continue
 
                 if version:
                     result.php_version = version
                     result.detected_from = detected_from
-
-                # Probe common PHP info endpoints
-                info_paths = ["/phpinfo.php", "/info.php", "/test.php", "/?phpinfo=1"]
-                for path in info_paths:
-                    if "phpinfo" in result.detected_from:
-                        break
-                    probe_url = url.rstrip("/") + path
-                    try:
-                        info_resp = await self.client.get(
-                            probe_url, timeout=self.timeout, proxy=proxy
-                        )
-                        if info_resp.status_code == 200:
-                            content = await info_resp.text()
-                            v = detect_from_phpinfo(content)
-                            if v:
-                                result.php_version = v
-                                result.detected_from.append("phpinfo")
-                                result.exposed_files.append(
-                                    ExposedFile(
-                                        url=probe_url,
-                                        file_type="phpinfo",
-                                        content_preview=content[:200] + "...",
-                                    )
-                                )
-                                break
-                    except Exception as exc:  # noqa: BLE001
-                        result.errors.append(f"Info probe failed: {exc}")
-
-                # Probe for exposed SQL/schema files
-                sql_paths = ["/backup.sql", "/dump.sql", "/database.sql", "/db_backup.sql"]
-                for path in sql_paths:
-                    probe_url = url.rstrip("/") + path
-                    try:
-                        sql_resp = await self.client.get(
-                            probe_url, timeout=self.timeout, proxy=proxy
-                        )
-                        if sql_resp.status_code == 200:
-                            content = await sql_resp.text()
-                            if any(kw in content.lower() for kw in ("create table", "insert into", "dump", "schema")):
-                                result.exposed_files.append(
-                                    ExposedFile(
-                                        url=probe_url,
-                                        file_type="sql_dump",
-                                        content_preview=content[:180] + "...",
-                                    )
-                                )
-                                result.db_schema = parse_sql_dump(content)
-                                break
-                    except Exception:  # noqa: BLE001
-                        continue
-
-                # Error-page probe (version leak on 404s) - only if still unknown
-                if not result.php_version:
-                    for _ in range(3):
-                        rand = random.randint(1000, 99999)
-                        err_path = f"/nonexistent-{rand}.php"
-                        err_url = url.rstrip("/") + err_path
-                        try:
-                            err_resp = await self.client.get(
-                                err_url, timeout=self.timeout, proxy=proxy
-                            )
-                            content = await err_resp.text()
-                            v = detect_from_error_page(content)
-                            if v:
-                                result.php_version = v
-                                result.detected_from.append("error_page")
-                                break
-                        except Exception as exc:  # noqa: BLE001
-                            result.errors.append(str(exc))
-
-                # CMS detection as bonus signal
-                if not result.php_version and body:
-                    cms = detect_cms_version(body)
-                    if cms:
-                        result.detected_from.append(f"cms:{cms[0]}")
-
-                # Vulnerability lookup
-                if result.php_version:
-                    result.vulns = get_vulns_for_version(result.php_version)
-
-                # Nuclei post-validation
-                if self.use_nuclei and result.vulns:
-                    try:
-                        result.nuclei_findings = validate_with_nuclei(
-                            result.url, result.vulns, timeout=self.timeout
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        result.errors.append(f"Nuclei error: {exc}")
-
-                # Ollama LLM summary (only when relevant findings exist)
-                if self.use_ollama and (result.vulns or result.exposed_files or result.db_schema):
-                    try:
-                        result.llm_summary = generate_summary(
-                            [result], model=self.ollama_model
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        result.errors.append(f"Ollama error: {exc}")
+                    result.vulns = get_vulns_for_version(version)
 
                 if callback is not None:
                     callback(result)
 
+                return result
             except Exception as exc:  # noqa: BLE001
-                result.errors.append(str(exc))
-
-            result.scan_time = datetime.now(timezone.utc)
-            return result
-
-    async def scan(
-        self, targets: List[str], callback: Optional[Callable[[ScanResult], None]] = None
-    ) -> List[ScanResult]:
-        """Run concurrent scans with rate limiting."""
-        if not targets:
-            return []
-
-        limits = httpx.Limits(max_connections=self.max_concurrency)
-        timeout_cfg = httpx.Timeout(self.timeout, connect=10.0)
-        async with httpx.AsyncClient(
-            limits=limits, timeout=timeout_cfg, follow_redirects=True
-        ) as client:
-            self.client = client
-            semaphore = asyncio.Semaphore(self.max_concurrency)
-            tasks = [self._probe_target(t, semaphore, callback) for t in targets]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            final: List[ScanResult] = []
-            for item in results:
-                if isinstance(item, ScanResult):
-                    final.append(item)
-                elif isinstance(item, Exception):
-                    final.append(
-                        ScanResult(
-                            url="unknown",
-                            errors=[f"Task failure: {item}"],
-                            scan_time=datetime.now(timezone.utc),
-                        )
-                    )
-            return final
+                result.errors.append(f"Probe failed: {str(exc)}")
+                return result
 
 
-def scan_targets(
+async def scan_targets(
     targets: List[str],
     config: Optional[Dict[str, Any]] = None,
     callback: Optional[Callable[[ScanResult], None]] = None,
 ) -> List[ScanResult]:
-    """Public API: scan list of targets asynchronously.
+    """Public async API to scan targets.
 
-    Results are returned as validated ScanResult objects.
+    Returns list of ScanResult. From synchronous code (CLI, scripts, tests)
+    wrap with asyncio.run():
+
+        import asyncio
+        results = asyncio.run(scan_targets(targets, config=config))
+
+    The optional live callback is invoked as soon as each target finishes.
     """
     scanner = AsyncScanner(config)
-    return asyncio.run(scanner.scan(targets, callback))
+    return await scanner.scan(targets, callback=callback)
 
 
-__all__ = ["scan_targets"]
+__all__ = ["scan_targets", "AsyncScanner"]
