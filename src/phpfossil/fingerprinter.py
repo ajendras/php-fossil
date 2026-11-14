@@ -5,7 +5,7 @@ phpinfo() output and error pages. Used by the AsyncScanner.
 """
 
 import re
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 def detect_from_headers(headers: Optional[Dict[str, str]] = None) -> Optional[str]:
@@ -314,7 +314,6 @@ def detect_cms_version(body: str) -> Optional[Tuple[str, str]]:
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List
 
 import httpx
 
