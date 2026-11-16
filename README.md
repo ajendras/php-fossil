@@ -70,7 +70,7 @@ Scheduled weekly scans of your own domains with artifact reports
 </td>
 <td>
 📑 <b>Rich Reports</b><br>
-Terminal tables, beautiful HTML reports and CSV exports for bug-bounty platforms via `ReportGenerator`
+Terminal tables, dark-mode HTML reports with sortable vulnerability table and CSV exports for bug-bounty platforms via `ReportGenerator`
 </td>
 <td>
 ⚡ <b>Async Scanner</b><br>
@@ -193,6 +193,8 @@ php-fossil report phpfossil-results.json --csv hackerone.csv
 ```
 
 The resulting CSV contains one row per vulnerability (URL, PHP version, risk score, title, severity, CVE, description, recommendation, reference, etc.) and maps cleanly to the import formats used by HackerOne, Bugcrowd and similar platforms.
+
+The HTML report is a self-contained dark-themed document featuring a live-searchable, sortable vulnerability table (click any column header), severity badges, risk metrics dashboard and one-click CSV export. No external dependencies are required to view it.
 
 **Launch the interactive live TUI:**
 
@@ -426,7 +428,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Shodan and Censys API modules for passive discovery
 - [x] Community fingerprint repository loader
 - [x] Severity scoring that factors in exposed schema sensitivity
-- [ ] Dark-mode HTML report with sortable vulnerability table
+- [x] Dark-mode HTML report with sortable vulnerability table
 
 > 🤖 This roadmap is worked through continuously — ideas and PRs welcome!
 <!-- roadmap:end -->

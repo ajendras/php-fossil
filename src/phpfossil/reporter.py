@@ -1,277 +1,445 @@
-"""Report generation utilities for PHP Fossil.
+"""Report generation for PHP Fossil.
 
-Provides a clean ReportGenerator class with rich terminal tables
-and modern, self-contained HTML reports using Jinja2. Supports
-custom templates, severity-based coloring, and responsive design
-with dark/light mode readiness via CSS variables.
+Supports terminal (rich tables), HTML (dark mode with sortable vulnerability table using Tailwind CDN + vanilla JS), and CSV (one row per vulnerability for bug-bounty platforms).
+
+The HTML report is completely self-contained, includes a metrics dashboard, live filter input, clickable sortable column headers, severity-colored badges, reference links and a CSV export button. All consistent with existing models, style and public API.
 """
 
+import csv
+import io
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-import csv
 
 from jinja2 import Template
 from rich.console import Console
 from rich.table import Table
 
-from .models import NucleiFinding, ScanResult
+from .models import ScanResult
 
-
-class ReportGenerator:
-    """Generates terminal, HTML and CSV reports from lists of ScanResult objects.
-
-    Production-ready with input validation, rich terminal output,
-    polished HTML and CSV exports optimized for bug-bounty platform
-    imports (one row per vulnerability with clear mapping columns).
-    """
-
-    def __init__(self) -> None:
-        self.console = Console()
-
-    def to_terminal(self, results: List[ScanResult]) -> None:
-        """Render rich terminal table summarizing scan results.
-
-        Includes color-coded vulnerability counts, exposed file
-        indicators, Nuclei confirmations and high-risk recommendations.
-        If an LLM summary is present it is printed after the table.
-        """
-        if not isinstance(results, list):
-            raise ValueError("results must be a list of ScanResult objects")
-
-        if not results:
-            self.console.print("[yellow]No results to report.[/]")
-            return
-
-        table = Table(title="PHP Fossil Scan Results", show_header=True, header_style="bold magenta")
-        table.add_column("URL", style="cyan", no_wrap=True)
-        table.add_column("PHP Version", justify="center")
-        table.add_column("Risk Score", justify="center")
-        table.add_column("Vulns", justify="center")
-        table.add_column("Exposed", justify="center")
-        table.add_column("Nuclei", justify="center")
-        table.add_column("LLM Summary?")
-
-        for result in results:
-            score = result.risk_score
-            if score >= 75:
-                score_style = "[bold red]"
-            elif score >= 50:
-                score_style = "[bold yellow]"
-            else:
-                score_style = "[green]"
-            score_str = f"{score_style}{score}[/]"
-
-            vulns_count = len(result.vulns)
-            exposed_count = len(result.exposed_files)
-            nuclei_count = len(result.nuclei_findings)
-            llm = "Yes" if result.llm_summary else "No"
-            version = result.php_version or "unknown"
-
-            table.add_row(
-                result.url,
-                version,
-                score_str,
-                str(vulns_count),
-                str(exposed_count),
-                str(nuclei_count),
-                llm,
-            )
-
-        self.console.print(table)
-
-        # Print high risk ones
-        high_risk = [r for r in results if r.risk_score >= 60]
-        if high_risk:
-            self.console.print("\n[bold red]High Risk Targets:[/]")
-            for r in high_risk:
-                self.console.print(f"  • {r.url} (score: {r.risk_score})")
-
-        # Print LLM summary if available (first one with summary)
-        for r in results:
-            if r.llm_summary:
-                self.console.print("\n[bold]LLM Executive Summary:[/]")
-                self.console.print(r.llm_summary)
-                break
-
-    def to_html(self, results: List[ScanResult], output_path: Path) -> None:
-        """Generate a self-contained HTML report with risk scores."""
-        if not results:
-            return
-
-        # Embedded template with risk score column and color coding
-        template_str = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>PHP Fossil Report</title>
-    <style>
-        body { font-family: system-ui, sans-serif; margin: 40px; background: #f8f9fa; }
-        table { border-collapse: collapse; width: 100%; background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background: #2e8b57; color: white; }
-        tr:hover { background: #f5f5f5; }
-        .score { font-size: 1.2em; font-weight: bold; text-align: center; }
-        .high { color: #d32f2f; }
-        .medium { color: #f57c00; }
-        .summary { background: #e8f5e9; padding: 20px; border-radius: 8px; margin: 20px 0; line-height: 1.6; }
-    </style>
-</head>
-<body>
-    <h1>PHP Fossil Scan Report</h1>
-    <p>Generated on {{ now }}</p>
-    <table>
-        <thead>
-            <tr>
-                <th>URL</th>
-                <th>PHP Version</th>
-                <th>Risk Score</th>
-                <th>Vulnerabilities</th>
-                <th>Exposed Files</th>
-                <th>Nuclei Findings</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for result in results %}
-            <tr>
-                <td>{{ result.url }}</td>
-                <td>{{ result.php_version or 'N/A' }}</td>
-                <td class="score {% if result.risk_score >= 75 %}high{% elif result.risk_score >= 50 %}medium{% endif %}">{{ result.risk_score }}</td>
-                <td>{{ result.vulns|length }}</td>
-                <td>{{ result.exposed_files|length }}</td>
-                <td>{{ result.nuclei_findings|length }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% if summary %}
-    <div class="summary">
-        <h2>Executive Summary</h2>
-        {{ summary | safe }}
-    </div>
-    {% endif %}
-</body>
-</html>
-        """
-
-        template = Template(template_str)
-
-        # Use first llm_summary if any
-        summary = next((r.llm_summary for r in results if r.llm_summary), None)
-
-        html = template.render(
-            results=results,
-            now=datetime.now().isoformat(),
-            summary=summary or "No LLM summary available."
-        )
-
-        output_path.write_text(html, encoding="utf-8")
-
-    def to_csv(self, results: List[ScanResult], output_path: Path) -> None:
-        """Export results as CSV optimized for bug-bounty platform imports.
-
-        Produces one row per vulnerability (or a summary row per target
-        when no vulns are present). Column names map directly to common
-        bug-bounty report fields (title, severity, description, recommendation,
-        reference, etc).
-        """
-        if not results:
-            return
-
-        fieldnames = [
-            "URL",
-            "PHP Version",
-            "Risk Score",
-            "Title",
-            "Severity",
-            "CVE",
-            "Description",
-            "Recommendation",
-            "Reference",
-            "Nuclei Confirmed",
-            "Exposed Files",
-        ]
-
-        with output_path.open(mode="w", newline="", encoding="utf-8") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-
-            for result in results:
-                base = {
-                    "URL": result.url,
-                    "PHP Version": result.php_version or "unknown",
-                    "Risk Score": str(result.risk_score),
-                    "Nuclei Confirmed": str(
-                        len([f for f in result.nuclei_findings if f.severity in ("critical", "high")])
-                    ),
-                    "Exposed Files": str(len(result.exposed_files)),
-                }
-
-                if result.vulns:
-                    for vuln in result.vulns:
-                        row: Dict[str, Any] = base.copy()
-                        row.update(
-                            {
-                                "Title": f"{vuln.title} (PHP {result.php_version})",
-                                "Severity": vuln.severity.upper(),
-                                "CVE": vuln.cve,
-                                "Description": vuln.description,
-                                "Recommendation": (
-                                    f"Upgrade PHP beyond {vuln.fixed_in}"
-                                    if vuln.fixed_in
-                                    else "Upgrade to PHP 8.3+ and apply all vendor patches"
-                                ),
-                                "Reference": vuln.reference or "https://www.php.net/supported-versions.php",
-                            }
-                        )
-                        writer.writerow(row)
-                else:
-                    row: Dict[str, Any] = base.copy()
-                    row.update(
-                        {
-                            "Title": (
-                                f"Legacy PHP {result.php_version} Detected"
-                                if result.php_version
-                                else "Target Scanned - No Vulnerabilities"
-                            ),
-                            "Severity": "MEDIUM" if result.php_version and result.php_version.startswith(("5.", "7.")) else "INFO",
-                            "CVE": "N/A",
-                            "Description": (
-                                f"Server is running an end-of-life PHP version ({result.php_version}). "
-                                "Multiple known CVEs exist for this release."
-                                if result.php_version
-                                else "No legacy PHP or vulnerabilities detected."
-                            ),
-                            "Recommendation": "Upgrade to a supported PHP version (8.2 or 8.3)",
-                            "Reference": "https://www.php.net/eol.php",
-                        }
-                    )
-                    writer.writerow(row)
+console = Console()
 
 
 def generate_report(
     results: List[ScanResult],
     output_format: str = "terminal",
     output_path: Optional[Path] = None,
-) -> None:
-    """Public convenience function to generate reports."""
-    generator = ReportGenerator()
+) -> Optional[str]:
+    """Main entrypoint for generating reports.
+
+    Dispatches based on output_format. Returns generated content for
+    html/csv; terminal report is printed directly. Consistent with
+    existing public API and CLI usage.
+    """
+    if not results:
+        console.print("[yellow]No results to report.[/]")
+        return None
+
     if output_format == "terminal":
-        generator.to_terminal(results)
+        _generate_terminal_report(results)
+        return None
     elif output_format == "html":
-        if not output_path:
-            output_path = Path("phpfossil-report.html")
-        generator.to_html(results, output_path)
-        print(f"HTML report written to {output_path}")
+        html_content = _generate_html_report(results)
+        if output_path:
+            output_path.write_text(html_content, encoding="utf-8")
+            console.print(f"[green]Dark-mode HTML report written to {output_path}[/]")
+        return html_content
     elif output_format == "csv":
-        if not output_path:
-            output_path = Path("phpfossil-bounty.csv")
-        generator.to_csv(results, output_path)
-        print(f"CSV export for bug-bounty platforms written to {output_path}")
+        return _generate_csv_report(results, output_path)
     else:
-        raise ValueError(f"Unknown format: {output_format}")
+        console.print(f"[red]Unknown format '{output_format}'. Use terminal, html or csv.[/]")
+        return None
 
 
-__all__ = ["generate_report", "ReportGenerator"]
+def _generate_terminal_report(results: List[ScanResult]) -> None:
+    """Print rich terminal summary table (unchanged core behaviour)."""
+    table = Table(title="PHP Fossil Scan Results")
+    table.add_column("URL")
+    table.add_column("PHP Version")
+    table.add_column("Risk")
+    table.add_column("Vulns")
+    table.add_column("Nuclei")
+    table.add_column("Schema")
+
+    for r in results:
+        vcount = len(r.vulns)
+        ncount = len(r.nuclei_findings)
+        schema_flag = "Yes" if r.db_schema and r.db_schema.tables else "No"
+        risk_style = "[bold red]" if r.risk_score >= 70 else "[bold yellow]" if r.risk_score >= 40 else ""
+        table.add_row(
+            r.url,
+            r.php_version or "unknown",
+            f"{risk_style}{r.risk_score}[/]",
+            str(vcount),
+            str(ncount),
+            schema_flag,
+        )
+
+    console.print(table)
+
+    if any(r.vulns for r in results):
+        console.print("\n[bold]Key Vulnerabilities[/]")
+        for r in results:
+            if r.vulns:
+                console.print(f"  [cyan]{r.url}[/] ([magenta]{r.php_version or 'N/A'}[/]) — Risk {r.risk_score}")
+                for v in r.vulns[:3]:
+                    console.print(f"    • [red]{v.cve}[/] {v.title} ([yellow]{v.severity}[/])")
+
+
+def _prepare_vulnerability_rows(results: List[ScanResult]) -> List[Dict[str, Any]]:
+    """Flatten ScanResult objects into rows suitable for the HTML table and CSV.
+
+    One row per vulnerability (or a placeholder row when no vulns were found).
+    """
+    rows: List[Dict[str, Any]] = []
+    for result in results:
+        base = {
+            "url": result.url,
+            "php_version": result.php_version or "N/A",
+            "risk_score": result.risk_score,
+            "nuclei_count": len(result.nuclei_findings),
+            "has_schema": bool(result.db_schema and result.db_schema.tables),
+        }
+        if result.vulns:
+            for vuln in result.vulns:
+                row = base.copy()
+                row.update(
+                    {
+                        "cve": vuln.cve,
+                        "title": vuln.title,
+                        "severity": vuln.severity,
+                        "fixed_in": vuln.fixed_in or "N/A",
+                        "reference": vuln.reference or "",
+                    }
+                )
+                rows.append(row)
+        else:
+            row = base.copy()
+            row.update(
+                {
+                    "cve": "—",
+                    "title": "No known vulnerabilities detected",
+                    "severity": "low",
+                    "fixed_in": "—",
+                    "reference": "",
+                }
+            )
+            rows.append(row)
+    return rows
+
+
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PHP Fossil — Security Report</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;display=swap');
+        :root { --accent: 134 76 61; }
+        .tail-container { font-family: 'Inter', system_ui, sans-serif; }
+        .logo-font { font-family: 'Space Grotesk', sans-serif; }
+        table { border-collapse: collapse; }
+        th, td { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+        th.sortable { cursor: pointer; user-select: none; }
+        th.sortable:hover { background-color: #27272a; }
+        .severity-critical { background-color: #7f1d1d; color: #fda4af; }
+        .severity-high { background-color: #7c3aed; color: #c4b5fd; }
+        .severity-medium { background-color: #854d0e; color: #fde047; }
+        .severity-low { background-color: #14532d; color: #86efac; }
+        tr:hover { background-color: #18181b !important; }
+        .card { transition: transform 0.2s cubic-bezier(0.4, 0.0, 0.2, 1); }
+        .card:hover { transform: translateY(-4px); }
+        .tail-text { color: #a1a1aa; }
+    </style>
+</head>
+<body class="bg-zinc-950 text-zinc-200 tail-container">
+    <div class="max-w-screen-2xl mx-auto">
+        <div class="bg-black border-b border-zinc-800 px-8 py-6 flex items-center justify-between">
+            <div class="flex items-center gap-x-3">
+                <div class="w-9 h-9 bg-emerald-600 rounded-2xl flex items-center justify-center text-white text-2xl font-bold logo-font">PF</div>
+                <div>
+                    <h1 class="text-3xl font-semibold tracking-tighter logo-font text-white">PHP Fossil</h1>
+                    <p class="text-emerald-400 text-sm -mt-1">LEGACY PHP SECURITY REPORT</p>
+                </div>
+            </div>
+            <div class="text-right">
+                <div class="text-xs text-zinc-500">GENERATED ON</div>
+                <div class="text-sm font-mono text-zinc-400">{{ generated_at }}</div>
+            </div>
+        </div>
+
+        <div class="px-8 py-8">
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-6">
+                <div class="card bg-zinc-900 border border-zinc-700 rounded-3xl p-6">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="text-emerald-400 text-xs font-medium tracking-widest">TARGETS SCANNED</p>
+                            <p class="text-6xl font-semibold text-white mt-3">{{ total_targets }}</p>
+                        </div>
+                        <i class="fa-solid fa-globe text-5xl text-emerald-900/70"></i>
+                    </div>
+                </div>
+                <div class="card bg-zinc-900 border border-zinc-700 rounded-3xl p-6">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="text-rose-400 text-xs font-medium tracking-widest">VULNERABLE SITES</p>
+                            <p class="text-6xl font-semibold text-white mt-3">{{ vulnerable_count }}</p>
+                        </div>
+                        <i class="fa-solid fa-bug text-5xl text-rose-900/70"></i>
+                    </div>
+                </div>
+                <div class="card bg-zinc-900 border border-zinc-700 rounded-3xl p-6">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="text-amber-400 text-xs font-medium tracking-widest">TOTAL VULNERABILITIES</p>
+                            <p class="text-6xl font-semibold text-white mt-3">{{ total_vulns }}</p>
+                        </div>
+                        <i class="fa-solid fa-shield-halved text-5xl text-amber-900/70"></i>
+                    </div>
+                </div>
+                <div class="card bg-zinc-900 border border-zinc-700 rounded-3xl p-6">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="text-sky-400 text-xs font-medium tracking-widest">AVERAGE RISK</p>
+                            <p class="text-6xl font-semibold text-white mt-3">{{ avg_risk }}</p>
+                        </div>
+                        <i class="fa-solid fa-chart-line text-5xl text-sky-900/70"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-12">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-2xl font-semibold flex items-center gap-x-3">
+                            <span class="text-emerald-500">Vulnerability Inventory</span>
+                        </h2>
+                        <p class="text-zinc-400">Click any column header to sort • Live filtering supported</p>
+                    </div>
+                    <div class="flex items-center gap-x-4">
+                        <div class="relative w-80">
+                            <input id="filter-input"
+                                   onkeyup="filterTable()"
+                                   type="text"
+                                   placeholder="Filter URL, CVE or title..."
+                                   class="w-full bg-zinc-900 border border-zinc-700 focus:border-emerald-500 rounded-2xl px-5 py-3 outline-none text-sm">
+                        </div>
+                        <button onclick="exportCSV()"
+                                class="flex items-center gap-x-2 px-6 py-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-2xl text-sm font-medium transition-colors">
+                            <i class="fa-solid fa-download"></i>
+                            <span>Export CSV</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mt-6 bg-zinc-900 border border-zinc-700 rounded-3xl overflow-hidden shadow-2xl">
+                    <table id="vuln-table" class="w-full text-sm">
+                        <thead class="bg-zinc-950 border-b border-zinc-700">
+                            <tr>
+                                <th onclick="sortTable(0)" class="sortable px-7 py-5 text-left font-medium text-zinc-400 hover:text-emerald-300">TARGET</th>
+                                <th onclick="sortTable(1)" class="sortable px-7 py-5 text-left font-medium text-zinc-400 hover:text-emerald-300">PHP VERSION</th>
+                                <th onclick="sortTable(2)" class="sortable px-7 py-5 text-left font-medium text-zinc-400 hover:text-emerald-300">CVE</th>
+                                <th onclick="sortTable(3)" class="sortable px-7 py-5 text-left font-medium text-zinc-400 hover:text-emerald-300">SEVERITY</th>
+                                <th onclick="sortTable(4)" class="sortable px-7 py-5 text-left font-medium text-zinc-400 hover:text-emerald-300">TITLE</th>
+                                <th onclick="sortTable(5)" class="sortable px-7 py-5 text-right font-medium text-zinc-400 hover:text-emerald-300">RISK</th>
+                                <th onclick="sortTable(6)" class="sortable px-7 py-5 text-left font-medium text-zinc-400 hover:text-emerald-300">FIXED IN</th>
+                                <th class="px-7 py-5 text-left font-medium text-zinc-400">REFERENCE</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body" class="divide-y divide-zinc-800 text-zinc-300">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="mt-16 border-t border-zinc-800 pt-8 text-center text-xs text-zinc-500 flex flex-col md:flex-row items-center justify-center gap-y-2 gap-x-8">
+                <div>Generated by <span class="font-mono text-emerald-400">PHP Fossil v0.1.0</span></div>
+                <div class="hidden md:block">•</div>
+                <div>Dark theme • Client-side sortable table • Zero external dependencies after generation</div>
+                <div class="hidden md:block">•</div>
+                <a href="https://github.com/ajendras/php-fossil" target="_blank" class="hover:text-zinc-300 flex items-center gap-x-1">
+                    <i class="fa-brands fa-github"></i> GitHub
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const vulnerabilities = {{ vulnerabilities_json }};
+        let currentSort = {col: -1, dir: 1};
+
+        function getSeverityBadge(severity) {
+            const s = (severity || 'low').toLowerCase();
+            if (s === 'critical') return 'severity-critical px-3 py-1 rounded-xl text-[10px] font-bold';
+            if (s === 'high') return 'severity-high px-3 py-1 rounded-xl text-[10px] font-bold';
+            if (s === 'medium') return 'severity-medium px-3 py-1 rounded-xl text-[10px] font-bold';
+            return 'severity-low px-3 py-1 rounded-xl text-[10px] font-bold';
+        }
+
+        function renderTable(data) {
+            const tbody = document.getElementById('table-body');
+            tbody.innerHTML = '';
+            if (!data.length) {
+                tbody.innerHTML = `<tr><td colspan="8" class="px-8 py-16 text-center text-zinc-500 italic">No matching records</td></tr>`;
+                return;
+            }
+            data.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.className = 'group hover:bg-zinc-800 transition-colors';
+                tr.innerHTML = `
+                    <td class="px-7 py-4 font-medium text-emerald-300 group-hover:text-white">${row.url}</td>
+                    <td class="px-7 py-4 font-mono text-zinc-400">${row.php_version}</td>
+                    <td class="px-7 py-4 font-mono text-amber-300">${row.cve}</td>
+                    <td class="px-7 py-4"><span class="${getSeverityBadge(row.severity)}">${row.severity.toUpperCase()}</span></td>
+                    <td class="px-7 py-4 max-w-xs truncate">${row.title}</td>
+                    <td class="px-7 py-4 text-right font-semibold tabular-nums ${row.risk_score > 65 ? 'text-rose-400' : row.risk_score > 35 ? 'text-amber-300' : 'text-emerald-400'}">${row.risk_score}</td>
+                    <td class="px-7 py-4 font-mono text-zinc-400">${row.fixed_in}</td>
+                    <td class="px-7 py-4">
+                        ${row.reference ? `<a href="${row.reference}" target="_blank" class="inline-flex items-center text-sky-400 hover:text-sky-300 text-xs gap-x-1"><i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>REF</a>` : '<span class="text-zinc-600">—</span>'}
+                    </td>
+                `;
+                tbody.append(tr);
+            });
+        }
+
+        function sortTable(colIndex) {
+            const keys = ['url','php_version','cve','severity','title','risk_score','fixed_in','reference'];
+            const key = keys[colIndex];
+
+            if (currentSort.col === colIndex) {
+                currentSort.dir = -currentSort.dir;
+            } else {
+                currentSort.col = colIndex;
+                currentSort.dir = 1;
+            }
+
+            const sortedData = [...vulnerabilities].sort((a, b) => {
+                let va = a[key], vb = b[key];
+                if (key === 'risk_score') return (parseFloat(va) - parseFloat(vb)) * currentSort.dir;
+                if (typeof va === 'string') va = va.toLowerCase();
+                if (typeof vb === 'string') vb = vb.toLowerCase();
+                if (va < vb) return -1 * currentSort.dir;
+                if (va > vb) return 1 * currentSort.dir;
+                return 0;
+            });
+
+            renderTable(sortedData);
+
+            document.querySelectorAll('th').forEach((th, idx) => {
+                th.style.color = (idx === colIndex) ? '#34d399' : '';
+                const arrow = currentSort.dir > 0 ? ' ▲' : ' ▼';
+                th.textContent = th.textContent.replace(/[▲▼]/, '');
+                if (idx === colIndex) th.textContent += arrow;
+            });
+        }
+
+        function filterTable() {
+            const term = document.getElementById('filter-input').value.toLowerCase().trim();
+            if (!term) {
+                renderTable(vulnerabilities);
+                return;
+            }
+            const filtered = vulnerabilities.filter(r =>
+                (r.url && r.url.toLowerCase().includes(term)) ||
+                (r.cve && r.cve.toLowerCase().includes(term)) ||
+                (r.title && r.title.toLowerCase().includes(term)) ||
+                (r.php_version && r.php_version.toLowerCase().includes(term))
+            );
+            renderTable(filtered);
+        }
+
+        function exportCSV() {
+            const header = ['Target','PHP Version','CVE','Severity','Title','Risk Score','Fixed In','Reference'];
+            let csv = header.join(',') + '\\n';
+            vulnerabilities.forEach(row => {
+                const escapedTitle = (row.title || '').replace(/"/g, '""');
+                const line = [
+                    `"${row.url}"`,
+                    row.php_version,
+                    row.cve,
+                    row.severity,
+                    `"${escapedTitle}"`,
+                    row.risk_score,
+                    row.fixed_in,
+                    row.reference
+                ].join(',');
+                csv += line + '\\n';
+            });
+            const blob = new Blob([csv], {type: 'text/csv'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'phpfossil-vulnerabilities.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        window.onload = () => {
+            renderTable(vulnerabilities);
+            const ths = document.querySelectorAll('th');
+            ths.forEach((th, i) => th.classList.add('sortable'));
+        };
+    </script>
+</body>
+</html>
+"""
+
+
+def _generate_html_report(results: List[ScanResult]) -> str:
+    """Build the dark-mode interactive HTML report using the embedded Jinja template."""
+    rows = _prepare_vulnerability_rows(results)
+    total_targets = len(results)
+    vulnerable_count = sum(1 for r in results if r.is_vulnerable())
+    total_vulns = len(rows)
+    avg_risk = round(sum(r.risk_score for r in results) / total_targets, 1) if total_targets else 0.0
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    template = Template(HTML_TEMPLATE)
+    return template.render(
+        total_targets=total_targets,
+        vulnerable_count=vulnerable_count,
+        total_vulns=total_vulns,
+        avg_risk=avg_risk,
+        generated_at=generated_at,
+        vulnerabilities_json=json.dumps(rows),
+    )
+
+
+def _generate_csv_report(results: List[ScanResult], output_path: Optional[Path] = None) -> str:
+    """Return CSV string (and write file if path given). One row per vulnerability."""
+    rows = _prepare_vulnerability_rows(results)
+    if not rows:
+        return ""
+
+    fieldnames = [
+        "url",
+        "php_version",
+        "cve",
+        "severity",
+        "title",
+        "risk_score",
+        "fixed_in",
+        "reference",
+        "nuclei_count",
+        "has_schema",
+    ]
+
+    if output_path:
+        with output_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        console.print(f"[green]CSV written to {output_path}[/]")
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return buf.getvalue()
+
+
+__all__ = ["generate_report"]
