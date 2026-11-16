@@ -107,6 +107,21 @@ class FingerprintRule(BaseModel):
         return v
 
 
+class PassiveResult(BaseModel):
+    """Normalized result from a passive discovery service (Shodan or Censys)."""
+
+    source: str = Field(..., description="The service used: shodan or censys")
+    url: str = Field(..., description="Discovered URL ready for scanning")
+    ip: Optional[str] = Field(None, description="IP address of host")
+    port: Optional[int] = Field(None, description="Discovered port")
+    banner: Optional[str] = Field(
+        None, description="Service banner or snippet from response"
+    )
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+
 class ScanResult(BaseModel):
     """Result of scanning one target."""
 
@@ -226,5 +241,6 @@ __all__ = [
     "SchemaResult",
     "NucleiFinding",
     "FingerprintRule",
+    "PassiveResult",
     "ScanResult",
 ]

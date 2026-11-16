@@ -6,7 +6,8 @@ Public API:
     generate_dorks, generate_report (supports terminal/html/csv),
     validate_with_nuclei, generate_summary, ScanResult, Vulnerability,
     NucleiFinding, get_vulns_for_version, parse_sql_dump, store_results,
-    get_historical_results, Store, run_tui
+    get_historical_results, Store, run_tui,
+    passive_discover, search_shodan, search_censys, PassiveResult
 
 CSV output (output_format="csv") produces one row per vulnerability with
 columns suitable for direct import into bug-bounty platforms (HackerOne,
@@ -25,6 +26,7 @@ from .models import (
     ScanResult,
     SchemaResult,
     Vulnerability,
+    PassiveResult,
 )
 from .scanner import scan_targets
 from .search import generate_dorks
@@ -49,6 +51,13 @@ from .fingerprinter import (
 from .nuclei import validate_with_nuclei, NucleiValidator
 from .ollama import generate_summary, is_ollama_available, OllamaSummarizer
 from .tui import run_tui
+from .passive import (
+    passive_discover,
+    search_shodan,
+    search_censys,
+    ShodanSearcher,
+    CensysSearcher,
+)
 
 __all__ = [
     "__version__",
@@ -90,4 +99,11 @@ __all__ = [
     "OllamaSummarizer",
     # TUI
     "run_tui",
+    # Passive discovery
+    "passive_discover",
+    "search_shodan",
+    "search_censys",
+    "ShodanSearcher",
+    "CensysSearcher",
+    "PassiveResult",
 ]

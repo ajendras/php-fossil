@@ -100,7 +100,10 @@ Loads and applies extensible detection rules from a community JSON repository (w
 📤 <b>Bug-Bounty CSV</b><br>
 One-row-per-vulnerability CSV ready for direct import into HackerOne, Bugcrowd and similar platforms
 </td>
-<td></td>
+<td>
+🔎 <b>Passive Discovery</b><br>
+Shodan and Censys API integration to discover PHP hosts without direct contact
+</td>
 </tr>
 </table>
 
@@ -169,6 +172,13 @@ print(summary)
 php-fossil dorks --version 7.4 --count 20 --save dorks.txt
 ```
 
+**Passive discovery with Shodan and Censys:**
+
+```bash
+php-fossil passive --query 'php "Version"' --shodan --limit 25
+php-fossil passive --query 'http.component:"PHP" port:"80"' --shodan --censys --scan
+```
+
 **Scan targets from a file with Nuclei and Ollama and community fingerprints:**
 
 ```bash
@@ -229,12 +239,20 @@ The action respects all existing configuration options (concurrency is limited f
 
 ```python
 import asyncio
-from phpfossil import generate_dorks, scan_targets, generate_report, get_historical_results, validate_with_nuclei, generate_summary, run_tui
-from phpfossil.models import ScanResult, Vulnerability
+from phpfossil import generate_dorks, scan_targets, generate_report, get_historical_results, validate_with_nuclei, generate_summary, run_tui, passive_discover, search_shodan
+from phpfossil.models import ScanResult, Vulnerability, PassiveResult
 
 # Custom dork generation
 dorks = generate_dorks("8.0", count=12)
 print(dorks[0])  # e.g. intitle:"phpinfo()" "PHP Version 8.0"
+
+# Passive discovery example
+targets = passive_discover(
+    query='php "Version 7.4"',
+    shodan_key="your-shodan-key-here",
+    limit=15
+)
+print("Discovered:", targets)
 
 # Direct scan with Nuclei + Ollama (callback supported for live UIs)
 def live_callback(result: ScanResult):
@@ -242,7 +260,7 @@ def live_callback(result: ScanResult):
 
 # scan_targets is async; wrap with asyncio.run() from sync contexts
 results: list[ScanResult] = asyncio.run(scan_targets(
-    ["https://httpbin.org"],
+    targets,
     config={"use_nuclei": True, "use_ollama": True, "ollama_model": "llama3", "use_community_fingerprints": True},
     callback=live_callback
 ))
@@ -316,8 +334,11 @@ print(CommunityFingerprinter.detect(body="Debug: PHP Version: 7.3.12", rules=[ru
 | use_community_fingerprints | false | Whether to load and apply community-sourced fingerprint rules from a JSON repository |
 | community_repo_url | (official GitHub raw URL) | Custom URL or local path to community fingerprint JSON (array of rule objects) |
 | db_path           | ~/.phpfossil/history.db | Path to persistent SQLite database for scan history |
+| shodan_api_key    | None    | Shodan API key (or set SHODAN_API_KEY environment variable) |
+| censys_api_id     | None    | Censys API ID (or set CENSYS_API_ID environment variable) |
+| censys_api_secret | None    | Censys API secret (or set CENSYS_API_SECRET environment variable) |
 
-These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency`, `--timeout`, `--nuclei`, `--ollama` and `--community`. In the TUI the concurrency is automatically lowered to 5 for smoother live updates. Proxy rotation and Nuclei are currently only available through the library API and the new `--nuclei` flag; future CLI enhancements will expand options. The SQLite store is used automatically by `scan` and `history` commands. Ollama summaries appear in terminal reports and the HTML overview when enabled. The new TUI respects all config options via its switches. Community fingerprint rules are cached for 24h in `~/.phpfossil/community_fingerprints.json` and fall back gracefully on network issues.
+These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency`, `--timeout`, `--nuclei`, `--ollama` and `--community`. In the TUI the concurrency is automatically lowered to 5 for smoother live updates. Proxy rotation and Nuclei are currently only available through the library API and the new `--nuclei` flag; future CLI enhancements will expand options. The SQLite store is used automatically by `scan` and `history` commands. Ollama summaries appear in terminal reports and the HTML overview when enabled. The new TUI respects all config options via its switches. Community fingerprint rules are cached for 24h in `~/.phpfossil/community_fingerprints.json` and fall back gracefully on network issues. Shodan and Censys keys are best supplied via environment variables for security.
 
 The scheduled GitHub Action uses a conservative concurrency of 5, always enables Nuclei, and skips Ollama (the fallback message is suppressed by not passing the flag). Edit the embedded `targets.txt` inside the workflow to list your own domains.
 
@@ -333,6 +354,7 @@ flowchart TD
     Scanner --> Nuclei[nuclei.py]
     Scanner --> Ollama[ollama.py]
     API --> Search[search.py]
+    API --> Passive[passive.py]
     API --> Reporter[reporter.py]
     API --> Store[store.py]
     API --> TUI[tui.py]
@@ -342,7 +364,7 @@ flowchart TD
     TUI --> Scanner
 ```
 
-PHP Fossil follows a clean, modular architecture. The public API in `__init__.py` (`scan_targets`, `generate_dorks`, `generate_report`, `store_results`, `get_historical_results`, `validate_with_nuclei`, `generate_summary`, `run_tui`) orchestrates everything. `AsyncScanner` uses a rate-limited `httpx.AsyncClient` and delegates to specialized modules for fingerprinting, vulnerability lookup, schema extraction, Nuclei validation, Ollama summarization and reporting. The new `PHPFossilTUI` uses Textual widgets and the scanner's live callback to provide real-time updates. All data flows through validated Pydantic models (`ScanResult`, `Vulnerability`, `SchemaResult`, `ExposedFile`, `NucleiFinding`). Scans are automatically persisted to SQLite via the `Store`.
+PHP Fossil follows a clean, modular architecture. The public API in `__init__.py` (`scan_targets`, `generate_dorks`, `generate_report`, `store_results`, `get_historical_results`, `validate_with_nuclei`, `generate_summary`, `run_tui`, `passive_discover`, `search_shodan`, `search_censys`) orchestrates everything. `AsyncScanner` uses a rate-limited `httpx.AsyncClient` and delegates to specialized modules for fingerprinting, vulnerability lookup, schema extraction, Nuclei validation, Ollama summarization and reporting. The new `PHPFossilTUI` uses Textual widgets and the scanner's live callback to provide real-time updates. All data flows through validated Pydantic models (`ScanResult`, `Vulnerability`, `SchemaResult`, `ExposedFile`, `NucleiFinding`, `PassiveResult`). Scans are automatically persisted to SQLite via the `Store`.
 
 ## 📁 Project structure
 
@@ -362,6 +384,7 @@ src/phpfossil/
 ├── nuclei.py            # validate_with_nuclei, Nuclei template mapping, subprocess runner
 ├── ollama.py            # Local LLM summaries via Ollama REST API (no extra deps)
 ├── search.py            # DorkGenerator with 18 templates
+├── passive.py           # Shodan and Censys API modules for passive discovery (new)
 ├── reporter.py          # ReportGenerator.to_terminal, to_html, to_csv + default Jinja template
 ├── tui.py               # Interactive Textual TUI for live scanning with real-time table updates
 ├── store.py             # Persistent SQLite store with automatic history tracking
@@ -400,7 +423,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Interactive terminal TUI with textual for live scanning
 - [x] GitHub Action for scheduled scans of your own domains
 - [x] CSV export compatible with bug-bounty platforms
-- [ ] Shodan and Censys API modules for passive discovery
+- [x] Shodan and Censys API modules for passive discovery
 - [x] Community fingerprint repository loader
 - [x] Severity scoring that factors in exposed schema sensitivity
 - [ ] Dark-mode HTML report with sortable vulnerability table

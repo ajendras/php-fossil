@@ -3,6 +3,7 @@
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import Annotated, Optional
+import os
 
 import asyncio
 import json
@@ -19,6 +20,7 @@ from phpfossil import (
     ScanResult,
     store_results,
     run_tui,
+    passive_discover,
 )
 
 app = typer.Typer(
@@ -68,6 +70,61 @@ def cmd_dorks(
     except ValueError as exc:
         console.print(f"[red]Error:[/] {exc}")
         raise typer.Exit(1) from exc
+
+
+@app.command("passive")
+def cmd_passive(
+    query: Annotated[str, typer.Option("--query", "-q", help="Search query (e.g. php \"Version 7.4\")")] = 'php "Version"',
+    shodan: Annotated[bool, typer.Option("--shodan", help="Use Shodan API")] = True,
+    censys: Annotated[bool, typer.Option("--censys", help="Use Censys API")] = False,
+    limit: Annotated[int, typer.Option("--limit", "-l", min=5, max=100)] = 20,
+    scan_discovered: Annotated[bool, typer.Option("--scan", help="Automatically scan discovered targets")] = False,
+) -> None:
+    """Perform passive discovery of legacy PHP hosts via Shodan and Censys APIs."""
+    console.print(f"[bold blue]Starting passive discovery for query: {query}[/]")
+
+    shodan_key = os.getenv("SHODAN_API_KEY")
+    censys_id = os.getenv("CENSYS_API_ID")
+    censys_secret = os.getenv("CENSYS_API_SECRET")
+
+    if shodan and not shodan_key:
+        console.print("[yellow]Warning: SHODAN_API_KEY not set in environment.[/]")
+    if censys and (not censys_id or not censys_secret):
+        console.print("[yellow]Warning: CENSYS_API_ID or CENSYS_API_SECRET not set in environment.[/]")
+
+    discovered = passive_discover(
+        query=query,
+        shodan_key=shodan_key if shodan else None,
+        censys_id=censys_id if censys else None,
+        censys_secret=censys_secret if censys else None,
+        limit=limit,
+    )
+
+    if not discovered:
+        console.print("[yellow]No targets discovered. Check API keys and query.[/]")
+        return
+
+    console.print(f"[green]Discovered {len(discovered)} unique target(s):[/]")
+    for url in discovered[:10]:
+        console.print(f"  • [cyan]{url}[/]")
+    if len(discovered) > 10:
+        console.print(f"  ... and {len(discovered)-10} more.")
+
+    if scan_discovered:
+        console.print("[bold blue]Scanning discovered targets...[/]")
+        config = {
+            "max_concurrency": min(15, len(discovered)),
+            "timeout": 12,
+            "use_nuclei": True,
+            "use_ollama": False,
+            "use_community_fingerprints": True,
+        }
+        results = asyncio.run(scan_targets(discovered, config=config))
+        store_results(results)
+        console.print("[green]Scan history persisted to SQLite.[/]")
+        generate_report(results, output_format="terminal")
+    else:
+        console.print("\n[green]Use --scan to automatically fingerprint and assess these targets.[/]")
 
 
 @app.command()
