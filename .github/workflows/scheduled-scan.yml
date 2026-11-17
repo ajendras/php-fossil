@@ -1,100 +1,58 @@
-name: PHP Fossil Scheduled Scan
+name: Scheduled PHP Fossil Scan
 
 on:
   schedule:
-    # Runs every Monday at 09:00 UTC. Change the cron expression to suit your needs.
-    - cron: '0 9 * * 1'
+    - cron: "0 9 * * 1"  # Mondays at 09:00 UTC
   workflow_dispatch:
-    inputs:
-      extra_targets:
-        description: 'Additional comma-separated targets (optional)'
-        required: false
-        default: ''
 
 jobs:
   scan:
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: read
-
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-          cache: 'pip'
+          python-version: "3.12"
+          cache: pip
 
       - name: Install PHP Fossil
         run: |
           python -m pip install --upgrade pip
-          pip install php-fossil
+          pip install .
 
       - name: Install Nuclei
-        uses: projectdiscovery/nuclei-action@v2
-        with:
-          version: latest
+        run: |
+          go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+          echo "${HOME}/go/bin" >> "${GITHUB_PATH}"
 
       - name: Prepare targets
         run: |
-          cat > /tmp/targets.txt << 'EOF'
-          # =============================================
-          # PHP Fossil Scheduled Scan Targets
-          # Add your own domains below (one per line).
-          # Lines starting with # are ignored.
-          # =============================================
+          cat > targets.txt << EOF
           https://httpbin.org
           http://example.com
-          # https://your-production-site.com
-          # https://legacy-app.internal.example.com
-          # https://old-php-site.example.com
+          # Add your production and legacy PHP domains here (one per line)
           EOF
-
-          # If workflow_dispatch provided extra targets, append them
-          if [ -n "${{ github.event.inputs.extra_targets }}" ]; then
-            echo "${{ github.event.inputs.extra_targets }}" | tr ',' '\n' | while read -r t; do
-              echo "$t" >> /tmp/targets.txt
-            done
-            echo "Added extra targets from workflow dispatch."
-          fi
-
-          echo "Targets to be scanned:"
-          grep -v '^#' /tmp/targets.txt | cat
 
       - name: Run PHP Fossil scan
         run: |
           php-fossil scan \
-            -f /tmp/targets.txt \
+            -f targets.txt \
             --concurrency 5 \
-            --timeout 20 \
+            --timeout 15 \
             --nuclei \
             --html report.html \
-            --output results.json
+            --csv results.csv
+        # Note: Ollama is disabled in CI as it requires a running service
 
-      - name: Upload scan results
+      - name: Upload results
         uses: actions/upload-artifact@v4
         with:
           name: phpfossil-results
           path: |
-            results.json
             report.html
-          retention-days: 90
-
-      - name: Generate job summary
-        run: |
-          echo "# PHP Fossil Scheduled Scan Results" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Scan completed at $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Targets scanned:** (see targets.txt in the workflow)" >> $GITHUB_STEP_SUMMARY
-          echo "- Nuclei validation: enabled" >> $GITHUB_STEP_SUMMARY
-          echo "- Ollama summarization: disabled (not available in GitHub runners)" >> $GITHUB_STEP_SUMMARY
-          echo "- Reports: attached as workflow artifact **phpfossil-results**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Download the HTML report to view a rich overview with vulnerabilities, exposed files, schema details and Nuclei confirmations." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "To customize:" >> $GITHUB_STEP_SUMMARY
-          echo "1. Edit the targets list inside **scheduled-scan.yml**" >> $GITHUB_STEP_SUMMARY
-          echo "2. Optionally supply extra targets when manually triggering the workflow" >> $GITHUB_STEP_SUMMARY
-          echo "3. Adjust concurrency/timeout/nuclei flags in the workflow step as needed" >> $GITHUB_STEP_SUMMARY
+            results.csv
+            phpfossil-results.json
+          retention-days: 7
