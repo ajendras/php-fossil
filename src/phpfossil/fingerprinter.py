@@ -249,6 +249,129 @@ def detect_joomla_version(body: str) -> Optional[str]:
     return None
 
 
+def detect_drupal_version(body: str) -> Optional[str]:
+    """Detect Drupal version from HTML body.
+
+    Looks for generator meta tag or "Drupal X.Y.Z" strings.
+
+    Args:
+        body: HTML content of a page.
+
+    Returns:
+        Drupal version string or None.
+    """
+    if not body or not isinstance(body, str):
+        return None
+
+    # Meta generator tag: <meta name="generator" content="Drupal 10.2.3">
+    meta_match = re.search(
+        r'<meta\s+name=["\'](?:generator|Generator)["\']\s+content=["\']Drupal\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        body,
+        re.IGNORECASE,
+    )
+    if meta_match:
+        return meta_match.group(1)
+
+    # Inline mention: "Drupal 10.2.3"
+    inline_match = re.search(
+        r'Drupal\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        body,
+        re.IGNORECASE,
+    )
+    if inline_match:
+        return inline_match.group(1)
+
+    return None
+
+
+def detect_magento_version(body: str) -> Optional[str]:
+    """Detect Magento version from HTML body.
+
+    Searches for generator meta, version in comments or specific Magento patterns.
+
+    Args:
+        body: HTML content.
+
+    Returns:
+        Magento version string or None.
+    """
+    if not body or not isinstance(body, str):
+        return None
+
+    # Meta generator: <meta name="generator" content="Magento 2.4.6">
+    meta_match = re.search(
+        r'<meta\s+name=["\']generator["\']\s+content=["\']Magento\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        body,
+        re.IGNORECASE,
+    )
+    if meta_match:
+        return meta_match.group(1)
+
+    # Common pattern in source comments
+    comment_match = re.search(
+        r'<!--\s*Magento.*?\s+([0-9]+\.[0-9]+\.[0-9]+)',
+        body,
+        re.IGNORECASE,
+    )
+    if comment_match:
+        return comment_match.group(1)
+
+    # Inline mention: "Magento 2.4.6"
+    inline_match = re.search(
+        r'Magento(?:\s+version)?\s*[:=]?\s*["\']?([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        body,
+        re.IGNORECASE,
+    )
+    if inline_match:
+        return inline_match.group(1)
+
+    return None
+
+
+def detect_prestashop_version(body: str) -> Optional[str]:
+    """Detect PrestaShop version from HTML body.
+
+    Looks for generator meta tag, powered-by footer or specific version strings.
+
+    Args:
+        body: HTML content.
+
+    Returns:
+        PrestaShop version string or None.
+    """
+    if not body or not isinstance(body, str):
+        return None
+
+    # Meta generator tag for PrestaShop with version
+    meta_match = re.search(
+        r'<meta\s+name=["\']generator["\']\s+content=["\']PrestaShop.*?([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        body,
+        re.IGNORECASE,
+    )
+    if meta_match and meta_match.group(1):
+        return meta_match.group(1)
+
+    # Common: Powered by PrestaShop 8.1.0
+    ps_match = re.search(
+        r'(?:Powered by|PrestaShop™?)\s*(?:&reg;)?\s*([0-9]+\.[0-9]+\.[0-9]+)',
+        body,
+        re.IGNORECASE,
+    )
+    if ps_match:
+        return ps_match.group(1)
+
+    # JS version
+    js_match = re.search(
+        r'prestashop\.version\s*[:=]\s*["\']([0-9.]+)["\']',
+        body,
+        re.IGNORECASE,
+    )
+    if js_match:
+        return js_match.group(1)
+
+    return None
+
+
 def detect_laravel_version(body: str) -> Optional[str]:
     """Detect Laravel version from HTML body.
 
@@ -287,10 +410,11 @@ def detect_laravel_version(body: str) -> Optional[str]:
 def detect_cms_version(body: str) -> Optional[Tuple[str, str]]:
     """Detect CMS name and version from HTML body.
 
-    Checks WordPress, Joomla, then Laravel in that order.
+    Checks WordPress, Joomla, Drupal, Magento, PrestaShop then Laravel
+    in that order of precedence.
 
     Returns:
-        Tuple of (cms_name, version) e.g. ("wordpress", "5.8.1") or None.
+        Tuple of (cms_name, version) e.g. ("drupal", "10.2.3") or None.
     """
     wp = detect_wordpress_version(body)
     if wp:
@@ -299,6 +423,18 @@ def detect_cms_version(body: str) -> Optional[Tuple[str, str]]:
     joomla = detect_joomla_version(body)
     if joomla:
         return ("joomla", joomla)
+
+    drupal = detect_drupal_version(body)
+    if drupal:
+        return ("drupal", drupal)
+
+    magento = detect_magento_version(body)
+    if magento:
+        return ("magento", magento)
+
+    prestashop = detect_prestashop_version(body)
+    if prestashop:
+        return ("prestashop", prestashop)
 
     laravel = detect_laravel_version(body)
     if laravel:
@@ -476,6 +612,9 @@ __all__ = [
     # CMS helpers
     "detect_wordpress_version",
     "detect_joomla_version",
+    "detect_drupal_version",
+    "detect_magento_version",
+    "detect_prestashop_version",
     "detect_laravel_version",
     "detect_cms_version",
     # Community fingerprint repository

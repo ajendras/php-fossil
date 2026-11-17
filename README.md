@@ -305,6 +305,25 @@ version = detect_php_version(
 print(version)  # 7.4.33
 ```
 
+**CMS fingerprinting (new):**
+
+```python
+from phpfossil.fingerprinter import (
+    detect_drupal_version,
+    detect_magento_version,
+    detect_prestashop_version,
+    detect_cms_version,
+)
+
+body = '<meta name="generator" content="Drupal 10.2.3">'
+print(detect_drupal_version(body))  # 10.2.3
+
+print(detect_cms_version(body))     # ('drupal', '10.2.3')
+
+magento_body = 'Magento 2.4.6'
+print(detect_magento_version(magento_body))  # 2.4.6
+```
+
 </details>
 
 <details><summary>Community fingerprint loader</summary>
@@ -429,6 +448,14 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Community fingerprint repository loader
 - [x] Severity scoring that factors in exposed schema sensitivity
 - [x] Dark-mode HTML report with sortable vulnerability table
+- [x] Add Drupal, Magento and PrestaShop CMS version fingerprinting in fingerprinter.py with dedicated detect_ functions
+- [ ] Introduce pydantic-based ConfigSettings class for CLI/config validation and defaults (DX)
+- [ ] Add pytest coverage for passive.py, nuclei.py and ollama.py with mocked API responses
+- [ ] Implement rotating User-Agent list in scanner.py with configurable pool
+- [ ] Extend embedded VulnDB with 30+ new PHP 8.0-8.3 CVEs plus EOL flags
+- [ ] Add --verbose / -v flag to all CLI commands with rich logging levels
+- [ ] Include mypy and ruff in CI workflow plus .github/dependabot.yml for dependency updates
+- [ ] Add troubleshooting guide section to README.md covering Nuclei, Ollama and proxy setup
 
 > 🤖 This roadmap is worked through continuously — ideas and PRs welcome!
 <!-- roadmap:end -->
