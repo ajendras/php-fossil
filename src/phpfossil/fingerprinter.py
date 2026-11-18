@@ -7,6 +7,8 @@ phpinfo() output and error pages. Used by the AsyncScanner.
 import re
 from typing import Dict, List, Optional, Tuple
 
+from .models import DEFAULT_COMMUNITY_REPO_URL, FingerprintRule
+
 
 def detect_from_headers(headers: Optional[Dict[str, str]] = None) -> Optional[str]:
     """Detect PHP version from response headers.
@@ -452,13 +454,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
-
-from .models import FingerprintRule
-
-
-DEFAULT_COMMUNITY_REPO_URL = (
-    "https://raw.githubusercontent.com/ajendras/php-fossil/main/community-fingerprints.json"
-)
 
 
 FALLBACK_COMMUNITY_RULES = [

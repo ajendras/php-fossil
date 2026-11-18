@@ -449,7 +449,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Severity scoring that factors in exposed schema sensitivity
 - [x] Dark-mode HTML report with sortable vulnerability table
 - [x] Add Drupal, Magento and PrestaShop CMS version fingerprinting in fingerprinter.py with dedicated detect_ functions
-- [ ] Introduce pydantic-based ConfigSettings class for CLI/config validation and defaults (DX)
+- [x] Introduce pydantic-based ConfigSettings class for CLI/config validation and defaults (DX)
 - [ ] Add pytest coverage for passive.py, nuclei.py and ollama.py with mocked API responses
 - [ ] Implement rotating User-Agent list in scanner.py with configurable pool
 - [ ] Extend embedded VulnDB with 30+ new PHP 8.0-8.3 CVEs plus EOL flags

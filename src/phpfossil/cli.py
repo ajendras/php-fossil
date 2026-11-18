@@ -21,6 +21,7 @@ from phpfossil import (
     store_results,
     run_tui,
     passive_discover,
+    ConfigSettings,
 )
 
 app = typer.Typer(
@@ -112,13 +113,20 @@ def cmd_passive(
 
     if scan_discovered:
         console.print("[bold blue]Scanning discovered targets...[/]")
-        config = {
-            "max_concurrency": min(15, len(discovered)),
-            "timeout": 12,
-            "use_nuclei": True,
-            "use_ollama": False,
-            "use_community_fingerprints": True,
-        }
+        try:
+            config = ConfigSettings(
+                max_concurrency=min(15, len(discovered)),
+                timeout=12,
+                use_nuclei=True,
+                use_ollama=False,
+                use_community_fingerprints=True,
+                shodan_api_key=shodan_key,
+                censys_api_id=censys_id,
+                censys_api_secret=censys_secret,
+            )
+        except Exception as exc:  # pydantic.ValidationError caught here
+            console.print(f"[red]Config validation error:[/] {exc}")
+            raise typer.Exit(1) from exc
         results = asyncio.run(scan_targets(discovered, config=config))
         store_results(results)
         console.print("[green]Scan history persisted to SQLite.[/]")
@@ -155,16 +163,24 @@ def scan(
         console.print("[yellow]No targets supplied, using demonstration targets...[/]")
         targets = ["https://httpbin.org", "http://example.com"]
 
-    config = {
-        "max_concurrency": concurrency,
-        "timeout": timeout,
-        "use_nuclei": nuclei,
-        "use_ollama": ollama,
-        "use_community_fingerprints": community,
-    }
+    try:
+        config = ConfigSettings(
+            max_concurrency=concurrency,
+            timeout=timeout,
+            use_nuclei=nuclei,
+            use_ollama=ollama,
+            use_community_fingerprints=community,
+        )
+    except Exception as exc:  # pydantic.ValidationError caught here
+        console.print(f"[red]Config validation error:[/] {exc}")
+        raise typer.Exit(1) from exc
 
-    console.print(f"[bold blue]Scanning {len(targets)} target(s) (concurrency={concurrency}, nuclei={nuclei}, ollama={ollama}, community={community})...[/]")
-    # Run the async scanner within the CLI's synchronous context
+    console.print(
+        f"[bold blue]Scanning {len(targets)} target(s) "
+        f"(concurrency={config.max_concurrency}, nuclei={config.use_nuclei}, "
+        f"ollama={config.use_ollama}, community={config.use_community_fingerprints})...[/]"
+    )
+    # Run the async scanner (now accepts ConfigSettings directly)
     results = asyncio.run(scan_targets(targets, config=config))
 
     # Persist raw results

@@ -2,12 +2,14 @@
 maps vulns, extracts schemas and builds prioritized security lists.
 
 Public API:
-    scan_targets (async — wrap with asyncio.run() from sync code),
+    scan_targets (async — wrap with asyncio.run() from sync code; now accepts ConfigSettings
+    or dict for validated configuration with defaults),
     generate_dorks, generate_report (supports terminal/html/csv),
     validate_with_nuclei, generate_summary, ScanResult, Vulnerability,
     NucleiFinding, get_vulns_for_version, parse_sql_dump, store_results,
     get_historical_results, Store, run_tui,
-    passive_discover, search_shodan, search_censys, PassiveResult
+    passive_discover, search_shodan, search_censys, PassiveResult,
+    ConfigSettings (new: pydantic-based validated settings with defaults and DX improvements)
 
 CSV output (output_format="csv") produces one row per vulnerability with
 columns suitable for direct import into bug-bounty platforms (HackerOne,
@@ -27,6 +29,7 @@ from .models import (
     SchemaResult,
     Vulnerability,
     PassiveResult,
+    ConfigSettings,
 )
 from .scanner import scan_targets
 from .search import generate_dorks
@@ -112,4 +115,6 @@ __all__ = [
     "ShodanSearcher",
     "CensysSearcher",
     "PassiveResult",
+    # New validated configuration
+    "ConfigSettings",
 ]

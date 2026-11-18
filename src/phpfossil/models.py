@@ -7,9 +7,17 @@ All models include validation, rich docstrings and secure defaults.
 
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 
 class Vulnerability(BaseModel):
@@ -120,6 +128,95 @@ class PassiveResult(BaseModel):
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+
+
+DEFAULT_COMMUNITY_REPO_URL = (
+    "https://raw.githubusercontent.com/ajendras/php-fossil/main/community-fingerprints.json"
+)
+
+
+class ConfigSettings(BaseModel):
+    """Pydantic-based configuration with built-in validation, defaults and DX improvements.
+
+    Replaces raw dicts for scan_targets(), CLI commands and library usage.
+    Supports direct instantiation, .model_dump() for backward compatibility,
+    field constraints, and environment-aware defaults where applicable.
+    """
+
+    max_concurrency: int = Field(
+        default=20,
+        ge=1,
+        le=50,
+        description="Maximum simultaneous HTTP requests (capped at 50)",
+    )
+    timeout: int = Field(
+        default=12,
+        ge=5,
+        le=60,
+        description="HTTP request timeout in seconds",
+    )
+    proxies: List[str] = Field(
+        default_factory=list,
+        description="Optional list of proxy URLs for rotating requests",
+    )
+    use_nuclei: bool = Field(
+        default=False,
+        description="Enable Nuclei for deeper exploit validation (requires nuclei binary)",
+    )
+    use_ollama: bool = Field(
+        default=False,
+        description="Enable local Ollama LLM for natural-language summaries",
+    )
+    ollama_model: str = Field(
+        default="llama3",
+        description="Ollama model name to use for summarization",
+    )
+    use_community_fingerprints: bool = Field(
+        default=False,
+        description="Whether to load and apply community-sourced fingerprint rules from a JSON repository",
+    )
+    community_repo_url: str = Field(
+        default=DEFAULT_COMMUNITY_REPO_URL,
+        description="URL or local path to community fingerprint JSON (array of rule objects)",
+    )
+    db_path: Optional[Path] = Field(
+        default=None,
+        description="Path to persistent SQLite database for scan history",
+    )
+    shodan_api_key: Optional[str] = Field(
+        default=None,
+        description="Shodan API key (falls back to SHODAN_API_KEY environment variable)",
+    )
+    censys_api_id: Optional[str] = Field(
+        default=None,
+        description="Censys API ID (falls back to CENSYS_API_ID environment variable)",
+    )
+    censys_api_secret: Optional[str] = Field(
+        default=None,
+        description="Censys API secret (falls back to CENSYS_API_SECRET environment variable)",
+    )
+
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_assignment=True,
+        populate_by_name=True,
+    )
+
+    def get_db_path(self) -> Path:
+        """Return resolved database path, using default ~/.phpfossil/history.db when unset."""
+        if self.db_path is None:
+            return Path.home() / ".phpfossil" / "history.db"
+        return self.db_path
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_legacy_dict(cls, data: Any) -> Any:
+        """Support legacy dicts that might use 'concurrency' key."""
+        if isinstance(data, dict):
+            data = data.copy()
+            if "concurrency" in data and "max_concurrency" not in data:
+                data["max_concurrency"] = data.pop("concurrency")
+        return data
 
 
 class ScanResult(BaseModel):
@@ -243,4 +340,6 @@ __all__ = [
     "FingerprintRule",
     "PassiveResult",
     "ScanResult",
+    "ConfigSettings",
+    "DEFAULT_COMMUNITY_REPO_URL",
 ]
