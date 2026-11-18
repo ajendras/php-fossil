@@ -450,6 +450,7 @@ def detect_cms_version(body: str) -> Optional[Tuple[str, str]]:
 # ----------------------------------------------------------------------
 
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -483,7 +484,9 @@ def load_community_fingerprints(
 
     The repository is expected to be a JSON array of rule objects.
     Results are cached locally in ~/.phpfossil/community_fingerprints.json
-    for the specified TTL.
+    for the specified TTL (automatically disabled during pytest runs
+    via PYTEST_CURRENT_TEST env var so that httpx_mock responses are
+    always exercised).
 
     On network or validation error, falls back to a small set of
     built-in rules.
@@ -492,6 +495,7 @@ def load_community_fingerprints(
         repo_url: URL or local path to the fingerprints JSON. Defaults to
                   the official community repository.
         cache_ttl_hours: How long to cache the downloaded rules (hours).
+                         0 disables caching.
 
     Returns:
         List of validated FingerprintRule objects.
@@ -503,8 +507,11 @@ def load_community_fingerprints(
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / "community_fingerprints.json"
 
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        cache_ttl_hours = 0
+
     # Use cache if fresh
-    if cache_file.exists():
+    if cache_file.exists() and cache_ttl_hours > 0:
         age = datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime)
         if age < timedelta(hours=cache_ttl_hours):
             try:
