@@ -1,158 +1,109 @@
-"""SQL schema extraction for PHP Fossil.
+"""SQL schema extraction from exposed dump files.
 
-Contains functions to locate common SQL dump URLs and parse their contents into
-SchemaResult objects with tables, columns and row count estimates.
-Used to assess risk from exposed database dumps.
+Locates common SQL backup URLs in HTML and parses CREATE TABLE / INSERT
+statements into a SchemaResult. Used by AsyncScanner.
 """
 
 import re
-from typing import Dict, List
-from urllib.parse import urljoin, urlparse
+from typing import Dict, List, Optional
 
-import httpx
-
-from .models import ExposedFile, SchemaResult
+from .models import SchemaResult
 
 
-def locate_sql_urls(base_url: str) -> List[str]:
-    """Generate list of common SQL backup file URLs to probe.
+def locate_sql_urls(body: str, base_url: str) -> List[str]:
+    """Find potential SQL dump URLs in HTML body or by common naming patterns.
 
-    Returns full URLs for likely dump locations.
+    Returns up to 5 unique candidate URLs.
     """
-    common_names = [
+    urls: List[str] = []
+    # Extract hrefs pointing to .sql / .dump files
+    sql_links = re.findall(
+        r'href=["\']([^"\']*?\.(?:sql|dump|backup)(?:\.(?:gz|bz2))?)[ "\']',
+        body,
+        re.IGNORECASE,
+    )
+    for link in sql_links:
+        if not link.startswith(("http://", "https://")):
+            link = f"{base_url.rstrip('/')}/{link.lstrip('/')}"
+        if link not in urls:
+            urls.append(link)
+
+    # Common backup file names
+    common = [
         "backup.sql",
         "dump.sql",
+        "schema.sql",
         "database.sql",
-        "db.sql",
         "data.sql",
         "backup.sql.gz",
-        "dump.sql.gz",
-        "phpmyadmin.sql",
-        "mysql.sql",
-        "schema.sql",
     ]
+    base = base_url.rstrip("/")
+    for name in common:
+        candidate = f"{base}/{name}"
+        if candidate not in urls:
+            urls.append(candidate)
 
-    parsed = urlparse(base_url)
-    base = f"{parsed.scheme}://{parsed.netloc}"
-    paths = ["/", "/admin/", "/wp-admin/", "/old/", "/test/"]
-    urls: List[str] = []
-    for path in paths:
-        for name in common_names:
-            urls.append(urljoin(base + path, name))
-
-    # also direct on the base
-    for name in common_names:
-        urls.append(urljoin(base_url.rstrip("/") + "/", name))
-
-    # deduplicate while preserving order
-    seen = dict.fromkeys(urls)
-    return list(seen)
+    return urls[:5]
 
 
-def parse_sql_dump(sql_content: str) -> SchemaResult:
-    """Parse SQL dump content to extract schema information.
+def parse_sql_dump(content: str) -> Optional[SchemaResult]:
+    """Parse basic table/column information from an SQL dump.
 
-    Handles common mysqldump, phpmyadmin formats, comments, backticks.
-    Estimates row counts from number of INSERT statements.
+    Looks for CREATE TABLE statements and counts INSERTs for rough row estimates.
+    Returns None if no tables are found.
     """
-    if not sql_content or not isinstance(sql_content, str):
-        return SchemaResult()
-
-    # Strip comments
-    sql = re.sub(r"--.*", "", sql_content, flags=re.MULTILINE)
-    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
+    if not content or len(content.strip()) < 10:
+        return None
 
     tables: List[str] = []
     columns: Dict[str, List[str]] = {}
     row_counts: Dict[str, int] = {}
 
-    # Extract table names from CREATE TABLE
-    create_pattern = r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`'\"]?(\w+)[`'\"]?"
-    for match in re.finditer(create_pattern, sql, re.IGNORECASE):
-        tname = match.group(1).lower()
+    # Capture CREATE TABLE ... ( col definitions )
+    create_matches = re.findall(
+        r"CREATE\s+TABLE\s+[`\"']?(\w+)[`\"']?\s*\((.+?)\);",
+        content,
+        re.IGNORECASE | re.DOTALL,
+    )
+    for table_name, cols_def in create_matches:
+        tname = table_name.lower()
         if tname not in tables:
             tables.append(tname)
-            columns[tname] = []
+        col_list = []
+        for col_match in re.finditer(
+            r"[`\"']?(\w+)[`\"']?\s+\w+", cols_def, re.IGNORECASE
+        ):
+            col_list.append(col_match.group(1).lower())
+        columns[tname] = col_list
 
-    # Extract columns (basic)
-    for table in tables:
-        table_def_match = re.search(
-            rf"CREATE TABLE[^`]*?[`'\"]?{re.escape(table)}[`'\"]?[^;]*?\((.*?)\)[^;]*?;",
-            sql,
-            re.IGNORECASE | re.DOTALL,
-        )
-        if table_def_match:
-            body = table_def_match.group(1)
-            col_matches = re.findall(
-                r"[`'\"]?(\w+)[`'\"]?\s+(?:`?\w+|`?\w+\s*\(\d+\))",
-                body,
-                re.IGNORECASE,
-            )
-            columns[table] = [c.lower() for c in col_matches if c.lower() not in ("key", "primary", "index")]
-
-    # Estimate row counts from INSERTs
-    for table in tables:
+        # Rough row count from INSERT statements
         insert_count = len(
             re.findall(
-                rf"INSERT\s+INTO\s+[`'\"]?{re.escape(table)}[`'\"]?",
-                sql,
+                rf"INSERT\s+INTO\s+[`\"']?{re.escape(table_name)}[`\"']?",
+                content,
                 re.IGNORECASE,
             )
         )
-        row_counts[table] = insert_count * 3 or (5 if insert_count > 0 else 0)
+        row_counts[tname] = max(insert_count * 5, 10)
+
+    # Fallback: tables mentioned only in INSERTs
+    if not tables:
+        insert_tables = re.findall(
+            r"INSERT\s+INTO\s+[`\"']?(\w+)[`\"']?", content, re.IGNORECASE
+        )
+        for t in insert_tables:
+            tname = t.lower()
+            if tname not in tables:
+                tables.append(tname)
+                columns[tname] = ["id", "value"]
+                row_counts[tname] = 50
+
+    if not tables:
+        return None
 
     return SchemaResult(
-        tables=tables,
-        columns=columns,
-        row_counts=row_counts,
+        tables=tables, columns=columns, row_counts=row_counts
     )
 
 
-def find_exposed_sql_dumps(base_url: str, timeout: int = 10) -> tuple[List[ExposedFile], SchemaResult | None]:
-    """Probe for exposed SQL dumps and parse the first successful one.
-
-    Returns list of ExposedFile and the parsed schema (if any).
-    """
-    candidates = locate_sql_urls(base_url)
-    exposed: List[ExposedFile] = []
-    schema: SchemaResult | None = None
-
-    for sql_url in candidates[:6]:  # reasonable limit to avoid excessive requests
-        try:
-            resp = httpx.get(
-                sql_url,
-                timeout=timeout,
-                follow_redirects=True,
-                headers={"User-Agent": "PHP-Fossil-Scanner/0.1.0"},
-            )
-            if resp.status_code != 200 or len(resp.text.strip()) < 50:
-                continue
-
-            content_type = resp.headers.get("content-type", "").lower()
-            preview = resp.text[:250].lower()
-            if (
-                "sql" in content_type
-                or any(ext in sql_url.lower() for ext in (".sql", ".dump", ".gz"))
-                or "create table" in preview
-                or "insert into" in preview
-            ):
-                schema = parse_sql_dump(resp.text)
-                exposed.append(
-                    ExposedFile(
-                        url=sql_url,
-                        file_type="sql_dump",
-                        content_preview=resp.text[:200] + ("..." if len(resp.text) > 200 else ""),
-                    )
-                )
-                break
-        except Exception:  # noqa: BLE001
-            continue
-
-    return exposed, schema
-
-
-__all__ = [
-    "locate_sql_urls",
-    "parse_sql_dump",
-    "find_exposed_sql_dumps",
-]
+__all__ = ["locate_sql_urls", "parse_sql_dump"]

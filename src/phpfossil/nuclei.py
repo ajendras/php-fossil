@@ -38,141 +38,81 @@ def get_nuclei_templates_for_vulns(vulns: List[Vulnerability]) -> List[str]:
         "exposed-debug-page",
         "php-cgi-arg-injection",
         "laravel-debug-mode",
-        "wordpress-file-inclusion",
-        "php-rce-generic",
+        "phpmyadmin-setup",
+        "wordpress-old-version",
+        "joomla-rce",
+        "drupal-rce",
     ]
     templates.extend(generic)
-    # Deduplicate while preserving order
-    seen = dict.fromkeys(templates)
-    return list(seen)[:15]  # reasonable limit
-
-
-def parse_nuclei_output(output: str) -> List[NucleiFinding]:
-    """Parse JSON-lines output from Nuclei into NucleiFinding models.
-
-    Handles both single JSON objects and JSON-lines format.
-    """
-    findings: List[NucleiFinding] = []
-    lines = output.strip().splitlines()
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            data = json.loads(line)
-            finding = NucleiFinding.model_validate(data)
-            findings.append(finding)
-        except (json.JSONDecodeError, ValueError):
-            # Try to build manually if the structure differs slightly
-            try:
-                info = data.get("info", {}) if isinstance(data, dict) else {}
-                finding = NucleiFinding(
-                    template=data.get("template-id", "") if isinstance(data, dict) else "",
-                    name=info.get("name", "Unknown") if isinstance(info, dict) else "Unknown",
-                    severity=info.get("severity", "medium") if isinstance(info, dict) else "medium",
-                    matched_at=data.get("matched-at") if isinstance(data, dict) else None,
-                    description=info.get("description") if isinstance(info, dict) else None,
-                )
-                findings.append(finding)
-            except Exception:  # noqa: BLE001
-                continue
-    return findings
+    # deduplicate while preserving order
+    return list(dict.fromkeys(templates))
 
 
 def validate_with_nuclei(
-    url: str,
-    vulns: List[Vulnerability],
-    timeout: int = 15,
-    extra_templates: Optional[List[str]] = None,
+    target: str, vulns: List[Vulnerability], timeout: int = 30
 ) -> List[NucleiFinding]:
-    """Run Nuclei against a target to validate discovered vulnerabilities.
+    """Run Nuclei against the target using templates derived from the vulns.
 
-    Uses templates derived from the supplied CVEs plus generic PHP templates.
-    Returns a list of NucleiFinding objects (empty on error).
-
-    Args:
-        url: Target URL to scan.
-        vulns: Vulnerabilities to map into templates.
-        timeout: Per-request timeout for Nuclei.
-        extra_templates: Additional template IDs to include.
-
-    Returns:
-        List of confirmed Nuclei findings.
+    Returns list of NucleiFinding objects parsed from JSONL output.
+    Gracefully handles missing binary, timeouts, and parsing errors.
     """
-    if not url or not isinstance(url, str):
-        return [NucleiFinding(template="error", name="Invalid URL", severity="low")]
-
-    if not vulns:
-        return []
-
     templates = get_nuclei_templates_for_vulns(vulns)
-    if extra_templates:
-        templates = list(dict.fromkeys(templates + extra_templates))
+    if not templates:
+        return []
 
     cmd = [
         "nuclei",
-        "-target", url,
-        "-id", ",".join(templates),
-        "-json",
+        "-target",
+        target,
+        "-id",
+        ",".join(templates),
+        "-jsonl",
         "-silent",
-        "-timeout", str(timeout),
+        "-timeout",
+        str(timeout),
         "-no-color",
-        "-disable-update-check",
     ]
 
     try:
-        proc = subprocess.run(
+        result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=90,
+            timeout=timeout + 10,
             check=False,
         )
-
-        if proc.returncode not in (0, 1):
-            stderr = proc.stderr.strip()
-            if "command not found" in stderr.lower() or "no such file" in stderr.lower():
-                return [
-                    NucleiFinding(
-                        template="error",
-                        name="Nuclei binary not found",
-                        severity="low",
-                        description="Install from https://nuclei.projectdiscovery.io",
-                    )
-                ]
-            return [
-                NucleiFinding(
-                    template="error",
-                    name="Nuclei execution error",
-                    severity="low",
-                    description=stderr or "Unknown error",
-                )
-            ]
-
-        return parse_nuclei_output(proc.stdout)
-
+        findings = []
+        for line in result.stdout.strip().splitlines():
+            if line.strip():
+                try:
+                    data = json.loads(line)
+                    findings.append(NucleiFinding.model_validate(data))
+                except json.JSONDecodeError:
+                    continue
+        return findings
     except subprocess.TimeoutExpired:
         return [
             NucleiFinding(
-                template="error",
-                name="Nuclei timeout",
-                severity="low",
-                description="Scan exceeded timeout",
+                template="timeout",
+                name="Nuclei scan timeout",
+                severity="medium",
+                description="Nuclei scan timed out",
             )
         ]
     except FileNotFoundError:
         return [
             NucleiFinding(
-                template="error",
+                template="nuclei-not-found",
                 name="Nuclei not installed",
-                severity="low",
-                description="nuclei binary must be in PATH",
+                severity="info",
+                description="Install nuclei to enable deep exploit validation",
             )
         ]
     except Exception as exc:  # noqa: BLE001
         return [
             NucleiFinding(
                 template="error",
-                name="Unexpected error",
+                name="Nuclei error",
                 severity="low",
                 description=str(exc),
             )
@@ -180,19 +120,16 @@ def validate_with_nuclei(
 
 
 class NucleiValidator:
-    """Object-oriented wrapper for Nuclei validation (for extensibility)."""
+    """Wrapper class mirroring style of CommunityFingerprinter / OllamaSummarizer."""
 
     @staticmethod
-    def validate(
-        target_url: str, vulns: List[Vulnerability], timeout: int = 15
-    ) -> List[NucleiFinding]:
-        """Run validation and return findings."""
-        return validate_with_nuclei(target_url, vulns, timeout=timeout)
+    def validate(target: str, vulns: List[Vulnerability]) -> List[NucleiFinding]:
+        """Run validation (static helper)."""
+        return validate_with_nuclei(target, vulns)
 
 
 __all__ = [
     "validate_with_nuclei",
-    "get_nuclei_templates_for_vulns",
-    "parse_nuclei_output",
     "NucleiValidator",
+    "get_nuclei_templates_for_vulns",
 ]

@@ -1,181 +1,172 @@
-"""Async scanner for PHP Fossil.
-
-Core scanning logic with concurrency control (Semaphore), proxy rotation via
-cycle + per-request proxy= kwarg (avoids passing proxies= to AsyncClient
-constructor to stay compatible with test mocks), fingerprinting, vuln
-lookup, schema extraction, optional Nuclei/Ollama/community steps and
-live callback support. One focused, high-quality implementation.
+"""Async scanner for PHP Fossil with rate limiting, proxy support, fingerprinting,
+schema extraction, optional Nuclei and Ollama integration, and live callbacks.
 """
 
 import asyncio
-from itertools import cycle
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
-from .fingerprinter import (
-    CommunityFingerprinter,
-    detect_php_version,
-    load_community_fingerprints,
-)
-from .models import ExposedFile, ScanResult, SchemaResult
+from .fingerprinter import detect_php_version, load_community_fingerprints
+from .models import ExposedFile, ScanResult
 from .nuclei import validate_with_nuclei
 from .ollama import generate_summary, is_ollama_available
 from .schema import locate_sql_urls, parse_sql_dump
 from .vulndb import get_vulns_for_version
 
 
-DEFAULT_CONFIG: Dict[str, Any] = {
-    "max_concurrency": 20,
-    "timeout": 12,
-    "proxies": [],
-    "use_nuclei": False,
-    "use_ollama": False,
-    "ollama_model": "llama3",
-    "use_community_fingerprints": False,
-    "community_repo_url": None,
-}
-
-
 class AsyncScanner:
-    """Internal async scanner with proxy rotation and rate limiting."""
+    """Main scanner class supporting async concurrent scanning with configurable features."""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
-        self.config = {**DEFAULT_CONFIG, **(config or {})}
-        self.semaphore = asyncio.Semaphore(max(1, min(self.config["max_concurrency"], 50)))
-        self.proxies = self.config.get("proxies", [])
-        self.proxy_cycle = cycle(self.proxies) if self.proxies else None
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        self.config = config or {}
+        self.max_concurrency: int = min(self.config.get("max_concurrency", 20), 50)
+        self.timeout: int = self.config.get("timeout", 12)
+        self.proxies = self.config.get("proxies")
+        self.use_nuclei: bool = self.config.get("use_nuclei", False)
+        self.use_ollama: bool = self.config.get("use_ollama", False)
+        self.use_community_fingerprints: bool = self.config.get(
+            "use_community_fingerprints", False
+        )
+        self.ollama_model: str = self.config.get("ollama_model", "llama3")
         self.community_rules = None
-        if self.config.get("use_community_fingerprints"):
-            repo_url = self.config.get("community_repo_url")
-            self.community_rules = load_community_fingerprints(repo_url)
-
-    async def _fetch(
-        self, client: httpx.AsyncClient, url: str
-    ) -> Optional[httpx.Response]:
-        """Single fetch under semaphore with optional rotating proxy."""
-        async with self.semaphore:
-            proxy = next(self.proxy_cycle) if self.proxy_cycle else None
+        if self.use_community_fingerprints:
             try:
-                return await client.get(
-                    url,
-                    timeout=self.config["timeout"],
-                    proxy=proxy,
-                    follow_redirects=True,
+                self.community_rules = load_community_fingerprints(
+                    self.config.get("community_repo_url")
                 )
-            except httpx.RequestError:
-                return None
             except Exception:  # noqa: BLE001
-                return None
-
-    async def _probe_target(
-        self,
-        client: httpx.AsyncClient,
-        target: str,
-        callback: Optional[Callable[[ScanResult], None]] = None,
-    ) -> ScanResult:
-        """Probe one target end-to-end."""
-        result = ScanResult(url=target)
-        try:
-            resp = await self._fetch(client, target)
-            if not resp:
-                result.errors.append("Request failed")
-                if callback:
-                    callback(result)
-                return result
-
-            headers = dict(resp.headers)
-            body = resp.text
-            detected_from: List[str] = []
-
-            version = detect_php_version(
-                headers=headers,
-                body=body,
-                community_rules=self.community_rules,
-            )
-            if version:
-                result.php_version = version
-                detected_from.append("headers/body")
-                result.vulns.extend(get_vulns_for_version(version))
-
-            # Schema / exposed files
-            sql_urls = locate_sql_urls(target, body)
-            for sql_url in sql_urls:
-                sql_resp = await self._fetch(client, sql_url)
-                if sql_resp and sql_resp.is_success:
-                    preview = sql_resp.text[:300] if sql_resp.text else ""
-                    result.exposed_files.append(
-                        ExposedFile(
-                            url=sql_url,
-                            file_type="sql_dump",
-                            content_preview=preview,
-                        )
-                    )
-                    try:
-                        result.db_schema = parse_sql_dump(sql_resp.text)
-                    except Exception:  # noqa: BLE001
-                        pass
-
-            if not result.php_version and body:
-                cms = detect_php_version(body=body)  # fallback
-                if cms:
-                    result.php_version = cms
-                    detected_from.append("body-fallback")
-
-            result.detected_from = detected_from
-
-            # Nuclei
-            if self.config.get("use_nuclei") and result.vulns:
-                result.nuclei_findings = validate_with_nuclei(
-                    target, result.vulns, timeout=self.config["timeout"]
-                )
-
-            # Ollama
-            if (
-                self.config.get("use_ollama")
-                and result.vulns
-                and is_ollama_available()
-            ):
-                result.llm_summary = generate_summary(
-                    [result], model=self.config["ollama_model"]
-                )
-
-            if callback:
-                callback(result)
-            return result
-
-        except Exception as exc:  # noqa: BLE001
-            result.errors.append(str(exc))
-            if callback:
-                callback(result)
-            return result
+                self.community_rules = None
 
     async def scan(
-        self,
-        targets: List[str],
-        callback: Optional[Callable[[ScanResult], None]] = None,
+        self, targets: List[str], callback: Optional[Callable[[ScanResult], None]] = None
     ) -> List[ScanResult]:
-        """Scan list of targets concurrently."""
+        """Scan multiple targets concurrently."""
         if not targets:
             return []
 
-        limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
         results: List[ScanResult] = []
+        semaphore = asyncio.Semaphore(self.max_concurrency)
 
         async with httpx.AsyncClient(
-            limits=limits,
+            timeout=self.timeout,
+            proxies=self.proxies,
             follow_redirects=True,
-            # proxies deliberately omitted from constructor to keep test mocks happy;
-            # rotation is performed per-request via the proxy= argument.
+            headers={"User-Agent": "PHP-Fossil-Scanner/0.1.0"},
         ) as client:
             tasks = [
-                asyncio.create_task(self._probe_target(client, t, callback))
-                for t in targets
+                self._probe_target(t, client, semaphore, callback) for t in targets
             ]
-            for completed in asyncio.as_completed(tasks):
-                results.append(await completed)
-
+            task_results = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in task_results:
+                if isinstance(res, Exception):
+                    results.append(
+                        ScanResult(
+                            url="error-target",
+                            errors=[f"Scan failed: {str(res)}"],
+                        )
+                    )
+                else:
+                    results.append(res)
         return results
+
+    async def _probe_target(
+        self,
+        url: str,
+        client: httpx.AsyncClient,
+        semaphore: asyncio.Semaphore,
+        callback: Optional[Callable[[ScanResult], None]] = None,
+    ) -> ScanResult:
+        """Probe a single target with all enabled detection vectors."""
+        async with semaphore:
+            result = ScanResult(url=url)
+            try:
+                response = await client.get(url)
+                headers = dict(response.headers)
+                body = response.text
+                if not response.is_success:
+                    result.errors.append(f"HTTP status: {response.status_code}")
+
+                # Version detection (headers, body, community rules)
+                php_version = detect_php_version(
+                    headers=headers,
+                    body=body,
+                    community_rules=self.community_rules
+                    if self.use_community_fingerprints
+                    else None,
+                )
+                if php_version:
+                    result.php_version = php_version
+                    result.detected_from.append(
+                        "community"
+                        if self.use_community_fingerprints
+                        else "headers/body"
+                    )
+                    result.vulns = get_vulns_for_version(php_version)
+
+                # Schema / exposed SQL files
+                sql_urls = locate_sql_urls(body, url)
+                for sql_url in sql_urls:
+                    try:
+                        sql_response = await client.get(sql_url)
+                        if sql_response.is_success:
+                            content = sql_response.text
+                            preview = (
+                                content[:400] + "..."
+                                if len(content) > 400
+                                else content
+                            )
+                            result.exposed_files.append(
+                                ExposedFile(
+                                    url=sql_url,
+                                    file_type="sql_dump",
+                                    content_preview=preview,
+                                )
+                            )
+                            schema = parse_sql_dump(content)
+                            if schema:
+                                result.db_schema = schema
+                            break
+                    except httpx.HTTPError:
+                        continue
+                    except Exception as e:  # noqa: BLE001
+                        result.errors.append(f"SQL fetch error for {sql_url}: {e}")
+
+                # Nuclei validation
+                if self.use_nuclei and result.vulns:
+                    try:
+                        result.nuclei_findings = validate_with_nuclei(
+                            url, result.vulns
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        result.errors.append(f"Nuclei failed: {e}")
+
+                # Ollama summarization
+                if (
+                    self.use_ollama
+                    and result.php_version
+                    and (result.vulns or result.db_schema)
+                ):
+                    try:
+                        if is_ollama_available():
+                            summary = generate_summary([result], self.ollama_model)
+                            result.llm_summary = summary
+                    except Exception as e:  # noqa: BLE001
+                        result.errors.append(f"Ollama summary failed: {e}")
+
+                if callback is not None:
+                    callback(result)
+
+            except httpx.TimeoutException:
+                result.errors.append("Request timeout")
+            except httpx.RequestError as e:
+                result.errors.append(f"Request error: {str(e)}")
+            except Exception as e:  # noqa: BLE001
+                result.errors.append(f"Unexpected error: {str(e)}")
+
+            result.scan_time = datetime.now()
+            return result
 
 
 async def scan_targets(
@@ -183,9 +174,9 @@ async def scan_targets(
     config: Optional[Dict[str, Any]] = None,
     callback: Optional[Callable[[ScanResult], None]] = None,
 ) -> List[ScanResult]:
-    """Public API: scan targets asynchronously (wrap with asyncio.run in sync code)."""
-    scanner = AsyncScanner(config=config)
-    return await scanner.scan(targets, callback=callback)
+    """Public async entrypoint for scanning targets."""
+    scanner = AsyncScanner(config)
+    return await scanner.scan(targets, callback)
 
 
 __all__ = ["scan_targets", "AsyncScanner"]
