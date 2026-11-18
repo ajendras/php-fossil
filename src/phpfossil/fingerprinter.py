@@ -318,11 +318,10 @@ def detect_magento_version(body: str) -> Optional[str]:
     if comment_match:
         return comment_match.group(1)
 
-    # Inline mention: "Magento 2.4.6"
+    # Inline mention: "Magento 2.4.6" or "Magento/2.4.6"
     inline_match = re.search(
-        r'Magento(?:\s+version)?\s*[:=]?\s*["\']?([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        r'(?i)Magento[/\s]+(?:version)?[:=\s/]*["\']?([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
         body,
-        re.IGNORECASE,
     )
     if inline_match:
         return inline_match.group(1)
