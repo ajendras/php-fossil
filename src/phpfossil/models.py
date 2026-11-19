@@ -20,6 +20,17 @@ from pydantic import (
 )
 
 
+DEFAULT_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+]
+
+
 class Vulnerability(BaseModel):
     """Represents a known vulnerability tied to a PHP version."""
 
@@ -158,6 +169,10 @@ class ConfigSettings(BaseModel):
     proxies: List[str] = Field(
         default_factory=list,
         description="Optional list of proxy URLs for rotating requests",
+    )
+    user_agents: List[str] = Field(
+        default_factory=lambda: DEFAULT_USER_AGENTS,
+        description="Rotating pool of User-Agent strings. Improves evasion; empty list falls back to built-in defaults.",
     )
     use_nuclei: bool = Field(
         default=False,
@@ -344,4 +359,5 @@ __all__ = [
     "ScanResult",
     "ConfigSettings",
     "DEFAULT_COMMUNITY_REPO_URL",
+    "DEFAULT_USER_AGENTS",
 ]

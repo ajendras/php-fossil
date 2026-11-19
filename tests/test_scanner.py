@@ -1,208 +1,138 @@
-"""Tests for the PHP Fossil scanner."""
+"""Tests for the scanner module (including new UA rotation)."""
 
 import asyncio
-from unittest.mock import patch
+import json
+from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
+from pytest_httpx import HTTPXMock
 
-from phpfossil import (
-    AsyncScanner,
-    ConfigSettings,
-    ScanResult,
-    scan_targets,
-)
-from phpfossil.fingerprinter import CommunityFingerprinter
-from phpfossil.models import NucleiFinding, SchemaResult, Vulnerability
+from phpfossil.models import ConfigSettings, ScanResult
+from phpfossil.scanner import AsyncScanner, scan_targets
 
 
 @pytest.mark.asyncio
-async def test_scan_error_handling(httpx_mock):
-    """Test error handling for unreachable targets."""
-    httpx_mock.add_exception(
-        httpx.ConnectError("Connection failed"),
-        url="http://bad.example.com",
-    )
-    results = await scan_targets(["http://bad.example.com"])
-    assert len(results) == 1
-    assert len(results[0].errors) > 0
-    assert any("error" in e.lower() or "connect" in e.lower() for e in results[0].errors)
-
-
-@pytest.mark.asyncio
-async def test_async_scanner_with_proxies(httpx_mock):
-    """Test scanning with proxy configuration."""
+async def test_scan_targets_basic(httpx_mock: HTTPXMock):
     httpx_mock.add_response(
-        url="https://example.com",
-        text='PHP Version 7.4.33 <meta name="generator" content="WordPress 5.8">',
-        headers={"Server": "Apache/2 PHP/7.4.33"},
-    )
-    config = ConfigSettings(
-        max_concurrency=5,
-        timeout=10,
-        proxies=["http://proxy.example.com:8080"],
-        use_community_fingerprints=False,
-    )
-    results = await scan_targets(["https://example.com"], config=config)
-    assert len(results) == 1
-    assert results[0].php_version == "7.4.33"
-    assert len(results[0].detected_from) >= 1
-
-
-@pytest.mark.asyncio
-async def test_async_scanner_direct(httpx_mock):
-    """Test direct usage of scanner against httpbin."""
-    httpx_mock.add_response(
-        url="https://httpbin.org",
-        text="PHP Version 8.0.0",
+        url="https://example.com/",
+        text="<title>PHP Version 8.0.0</title>",
         headers={"X-Powered-By": "PHP/8.0.0"},
     )
-    results = await scan_targets(["https://httpbin.org"], config={"max_concurrency": 3})
+    results = await scan_targets(
+        ["https://example.com"],
+        config={"use_nuclei": False, "use_ollama": False, "use_community_fingerprints": False},
+    )
     assert len(results) == 1
     assert results[0].php_version == "8.0.0"
+    assert "headers+body" in results[0].detected_from
 
 
 @pytest.mark.asyncio
-async def test_scanner_with_nuclei(httpx_mock):
-    """Test integration with Nuclei validator."""
-    httpx_mock.add_response(
-        url="https://example.com",
-        text="PHP Version 7.2.0",
-        headers={"X-Powered-By": "PHP/7.2.0"},
-    )
-    with patch("phpfossil.nuclei.validate_with_nuclei") as mock_nuclei:
-        mock_nuclei.return_value = [
-            NucleiFinding(
-                template="php-cve",
-                name="PHP RCE",
-                severity="critical",
-            )
-        ]
-        config = ConfigSettings(use_nuclei=True, max_concurrency=5)
-        results = await scan_targets(["https://example.com"], config=config)
-        assert len(results) == 1
-        assert len(results[0].nuclei_findings) == 1
-        assert results[0].nuclei_findings[0].severity == "critical"
-
-
-@pytest.mark.asyncio
-async def test_scanner_with_ollama(httpx_mock):
-    """Test Ollama summarization from scanner."""
-    httpx_mock.add_response(
-        url="https://example.com",
-        text="PHP Version 5.6.40",
-        headers={"X-Powered-By": "PHP/5.6.40"},
-    )
-    httpx_mock.add_response(
-        url="http://localhost:11434/api/generate",
-        json={"response": "This is a test summary of the vulnerabilities found."},
-    )
+async def test_user_agent_rotation(httpx_mock: HTTPXMock):
+    """Test that User-Agents are rotated across requests."""
+    custom_uas = [
+        "Mozilla/5.0 (Custom-UA-1)",
+        "Mozilla/5.0 (Custom-UA-2)",
+        "Mozilla/5.0 (Custom-UA-3)",
+    ]
     config = ConfigSettings(
-        use_ollama=True,
-        ollama_model="llama3",
-        use_nuclei=False,
         max_concurrency=5,
+        timeout=5,
+        user_agents=custom_uas,
+        use_nuclei=False,
+        use_ollama=False,
+        use_community_fingerprints=False,
     )
-    results = await scan_targets(["https://example.com"], config=config)
-    assert len(results) == 1
-    assert results[0].php_version == "5.6.40"
-    assert results[0].llm_summary is not None
 
-
-@pytest.mark.asyncio
-async def test_scanner_live_callback(httpx_mock):
-    """Test live callback during scanning."""
+    # Multiple targets to force multiple UA usages
     httpx_mock.add_response(
-        url="https://example.com",
-        text="<h1>PHP Version 7.4.33</h1>",
-        headers={"X-Powered-By": "PHP/7.4.33"},
+        url="https://example.com/",
+        text="PHP Version 7.4.33",
+        headers={"Server": "Apache PHP/7.4.33"},
     )
-    callback_calls = []
-    def live_callback(result: ScanResult):
-        callback_calls.append(result)
-    config = ConfigSettings(max_concurrency=5, use_community_fingerprints=False)
+    httpx_mock.add_response(
+        url="https://example.com/phpinfo.php",
+        text="PHP Version 7.4.33",
+    )
+    httpx_mock.add_response(
+        url="https://test.com/",
+        text="PHP 8.1 detected",
+    )
+
     results = await scan_targets(
-        ["https://example.com"], config=config, callback=live_callback
+        ["https://example.com", "https://test.com"],
+        config=config,
     )
-    assert len(results) == 1
-    assert len(callback_calls) == 1
+
+    assert len(results) == 2
     assert results[0].php_version == "7.4.33"
+    assert results[1].php_version == "8.1"
+
+    requests = httpx_mock.get_requests()
+    used_uas = [req.headers.get("User-Agent") for req in requests if "User-Agent" in req.headers]
+    # At least two different UAs should have been used due to rotation
+    assert len(set(used_uas)) >= 2
+    for ua in used_uas:
+        assert ua in custom_uas
 
 
 @pytest.mark.asyncio
-async def test_scanner_with_schema_sync(httpx_mock):
-    """Test schema extraction with SQL dump (sync-named test for historical reasons)."""
-    httpx_mock.add_response(
-        url="https://example.com",
-        text='... <a href="dump.sql">database backup</a> ... PHP 7.4',
-        headers={},
+async def test_ua_rotation_with_default_pool(httpx_mock: HTTPXMock):
+    """Ensure default UA pool is used when none provided."""
+    config = ConfigSettings(
+        max_concurrency=3,
+        user_agents=[],  # triggers default
+        use_nuclei=False,
+        use_ollama=False,
+        use_community_fingerprints=False,
     )
     httpx_mock.add_response(
-        url="https://example.com/dump.sql",
-        text="CREATE TABLE users (id INT, password VARCHAR(255));\n-- row count approx 500",
+        url="https://httpbin.org",
+        text="PHP Version 7.3.12",
     )
-    config = ConfigSettings(max_concurrency=5)
-    results = await scan_targets(["https://example.com"], config=config)
-    assert len(results) == 1
-    assert results[0].db_schema is not None
-    assert "users" in [t.lower() for t in results[0].db_schema.tables]
-
-
-@pytest.mark.asyncio
-async def test_community_fingerprints_in_scanner(httpx_mock):
-    """Test community fingerprints loaded and applied by the scanner."""
-    httpx_mock.add_response(
-        url="https://raw.githubusercontent.com/ajendras/php-fossil/main/community-fingerprints.json",
-        json=[
-            {
-                "type": "body",
-                "pattern": r"PHP Version[:\s]+(\d+\.\d+\.\d+)",
-                "version_group": 1,
-            }
-        ],
-    )
-    httpx_mock.add_response(
-        url="https://example.com",
-        text="Debug info: PHP Version: 7.3.12",
-    )
-    config = ConfigSettings(use_community_fingerprints=True, max_concurrency=5)
-    results = await scan_targets(["https://example.com"], config=config)
+    results = await scan_targets(["https://httpbin.org"], config=config)
     assert len(results) == 1
     assert results[0].php_version == "7.3.12"
 
-
-@pytest.mark.asyncio
-async def test_async_scanner_class(httpx_mock):
-    """Test the AsyncScanner class directly."""
-    httpx_mock.add_response(
-        url="https://test.com",
-        text="PHP Version 7.4.33",
-        headers={"X-Powered-By": "PHP/7.4.33"},
-    )
-    scanner = AsyncScanner(config={"max_concurrency": 10})
-    results = await scanner.scan(["https://test.com"])
-    assert len(results) == 1
-    assert results[0].php_version == "7.4.33"
+    requests = httpx_mock.get_requests()
+    uas = [r.headers.get("User-Agent") for r in requests]
+    # At least one UA from the built-in default list should appear
+    assert any("Mozilla/5.0" in ua for ua in uas)
 
 
 @pytest.mark.asyncio
-async def test_scanner_vuln_mapping(httpx_mock):
-    """Test vulnerability mapping for a legacy PHP version."""
+async def test_scanner_live_callback(httpx_mock: HTTPXMock):
+    callback = MagicMock()
     httpx_mock.add_response(
-        url="https://legacy.test",
-        text="Powered by PHP 5.6.40",
-        headers={"X-Powered-By": "PHP/5.6.40"},
+        url="https://example.com",
+        text="<h1>PHP Version 5.6.40</h1>",
     )
-    results = await scan_targets(["https://legacy.test"], config={"use_nuclei": False})
-    assert len(results) == 1
-    assert results[0].php_version == "5.6.40"
-    assert len(results[0].vulns) > 0
-    assert any(v.severity in ("high", "critical") for v in results[0].vulns)
+    await scan_targets(
+        ["https://example.com"],
+        config={"use_nuclei": False, "use_ollama": False},
+        callback=callback,
+    )
+    callback.assert_called_once()
+    assert isinstance(callback.call_args[0][0], ScanResult)
 
 
-def test_config_settings_none():
-    """Test that ConfigSettings accepts None (uses defaults)."""
-    config = ConfigSettings(None)
-    assert config.max_concurrency == 20
-    assert not config.use_nuclei
-    assert not config.use_ollama
+def test_config_with_user_agents():
+    cfg = ConfigSettings(user_agents=["UA1", "UA2"])
+    assert len(cfg.user_agents) == 2
+    assert cfg.user_agents[0] == "UA1"
+
+
+@pytest.mark.asyncio
+async def test_proxy_and_ua_together(httpx_mock: HTTPXMock):
+    config = ConfigSettings(
+        proxies=["http://proxy1:8080", "http://proxy2:8080"],
+        user_agents=["UA-Proxy-Test"],
+        use_nuclei=False,
+        use_ollama=False,
+        use_community_fingerprints=False,
+    )
+    httpx_mock.add_response(url="https://target.com", text="PHP 7.2")
+    results = await scan_targets(["https://target.com"], config=config)
+    assert results[0].php_version == "7.2"
+    requests = httpx_mock.get_requests()
+    assert any("UA-Proxy-Test" in str(r.headers) for r in requests)

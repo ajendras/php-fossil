@@ -146,6 +146,7 @@ results = asyncio.run(scan_targets(
         "use_ollama": True,
         "ollama_model": "llama3",
         "use_community_fingerprints": True,
+        "user_agents": [],  # empty = use built-in rotating pool
     }
 ))
 
@@ -263,7 +264,13 @@ def live_callback(result: ScanResult):
 # scan_targets is async; wrap with asyncio.run() from sync contexts
 results: list[ScanResult] = asyncio.run(scan_targets(
     targets,
-    config={"use_nuclei": True, "use_ollama": True, "ollama_model": "llama3", "use_community_fingerprints": True},
+    config={
+        "use_nuclei": True,
+        "use_ollama": True,
+        "ollama_model": "llama3",
+        "use_community_fingerprints": True,
+        "user_agents": [],  # uses built-in rotating pool by default
+    },
     callback=live_callback
 ))
 for r in results:
@@ -349,6 +356,7 @@ print(CommunityFingerprinter.detect(body="Debug: PHP Version: 7.3.12", rules=[ru
 | max_concurrency   | 20      | Maximum simultaneous HTTP requests (capped at 50) |
 | timeout           | 12      | HTTP request timeout in seconds                  |
 | proxies           | []      | Optional list of proxy URLs for rotating requests |
+| user_agents       | [built-in list] | Rotating User-Agent pool (common browsers + Googlebot). Empty list uses internal defaults. Rotation happens on every request for evasion. |
 | use_nuclei        | false   | Enable Nuclei for deeper exploit validation (requires `nuclei` binary in PATH) |
 | use_ollama        | false   | Enable local Ollama LLM for natural-language summaries of issues (requires Ollama running with a model like llama3) |
 | ollama_model      | llama3  | Ollama model name to use for summarization |
@@ -397,7 +405,7 @@ PHP Fossil follows a clean, modular architecture. The public API in `__init__.py
 src/phpfossil/
 ├── __init__.py          # Public API, models, scan_targets, generate_dorks, generate_report
 ├── cli.py               # Typer commands: scan, dorks, report, list, history, tui
-├── models.py            # Pydantic models (ScanResult, Vulnerability, SchemaResult, ExposedFile, NucleiFinding)
+├── models.py            # Pydantic models (ScanResult, Vulnerability, SchemaResult, ExposedFile)
 ├── scanner.py           # Async scanning, _probe_target, rate limiting, proxy rotation, Nuclei/Ollama post-processing + live callback
 ├── fingerprinter.py     # detect_from_headers, detect_from_body, detect_from_phpinfo, detect_from_error_page
 ├── vulndb.py            # _get_embedded_vulndb, get_vulns_for_version
@@ -451,7 +459,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Add Drupal, Magento and PrestaShop CMS version fingerprinting in fingerprinter.py with dedicated detect_ functions
 - [x] Introduce pydantic-based ConfigSettings class for CLI/config validation and defaults (DX)
 - [x] Add pytest coverage for passive.py, nuclei.py and ollama.py with mocked API responses
-- [ ] Implement rotating User-Agent list in scanner.py with configurable pool
+- [x] Implement rotating User-Agent list in scanner.py with configurable pool
 - [ ] Extend embedded VulnDB with 30+ new PHP 8.0-8.3 CVEs plus EOL flags
 - [ ] Add --verbose / -v flag to all CLI commands with rich logging levels
 - [ ] Include mypy and ruff in CI workflow plus .github/dependabot.yml for dependency updates
