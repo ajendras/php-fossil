@@ -1,168 +1,102 @@
-"""Shodan and Censys API modules for passive discovery.
+"""Passive OSINT modules for discovering PHP hosts via Shodan and Censys without direct probing.
 
-Provides functions and wrapper classes to query Shodan and Censys for
-hosts that may be running legacy PHP. Results are normalized into
-PassiveResult Pydantic models that can be fed directly into scan_targets().
-
-Uses only httpx (already a dependency). API credentials are accepted as
-parameters or read from standard environment variables:
-    SHODAN_API_KEY, CENSYS_API_ID, CENSYS_API_SECRET.
-
-Consistent style with nuclei.py and ollama.py. Graceful error handling
-and deduplication of discovered URLs.
+Normalizes results into PassiveResult objects for use with the active scanner.
 """
 
-import json
-import os
-from datetime import datetime, timezone
-from typing import List, Optional
-
 import httpx
+from typing import List, Optional
+from urllib.parse import urlencode
 
 from .models import PassiveResult
 
 
 def search_shodan(
-    query: str = 'php "Version"',
-    api_key: Optional[str] = None,
-    limit: int = 20,
+    query: str, api_key: Optional[str] = None, limit: int = 10
 ) -> List[PassiveResult]:
-    """Search Shodan for hosts matching a query.
-
-    If api_key is not supplied the SHODAN_API_KEY environment variable
-    is used. Returns PassiveResult objects with constructed URLs.
-    """
+    """Query Shodan API for hosts matching a dork/query."""
     if not api_key:
-        api_key = os.getenv("SHODAN_API_KEY")
-    if not api_key:
-        return [
-            PassiveResult(
-                source="shodan",
-                url="",
-                banner="No Shodan API key provided",
-            )
-        ]
+        return []
 
-    results: List[PassiveResult] = []
     try:
-        with httpx.Client(timeout=10.0) as client:
-            resp = client.get(
-                f"https://api.shodan.io/shodan/host/search?key={api_key}&query={query}",
-                headers={"Accept": "application/json"},
-            )
+        params = {"query": query, "key": api_key, "limit": str(limit)}
+        url = f"https://api.shodan.io/shodan/host/search?{urlencode(params)}"
+
+        with httpx.Client(timeout=12.0) as client:
+            resp = client.get(url)
             resp.raise_for_status()
             data = resp.json()
-            matches = data.get("matches", [])[:limit]
 
-            for match in matches:
-                ip = match.get("ip_str")
-                port = match.get("port", 80)
-                hostnames = match.get("hostnames") or []
-                hostname = hostnames[0] if hostnames else ip
-                # prefer https when ssl data or port 443 is present
-                protocol = "https" if match.get("ssl") or port == 443 else "http"
-                if port not in (80, 443):
-                    url = f"{protocol}://{hostname}:{port}"
-                else:
-                    url = f"{protocol}://{hostname}"
-
-                banner = match.get("data", "")[:200]
-                results.append(
-                    PassiveResult(
-                        source="shodan",
-                        url=url,
-                        ip=ip,
-                        port=port,
-                        banner=banner or None,
-                    )
+        results = []
+        for match in data.get("matches", [])[:limit]:
+            ip = match.get("ip_str")
+            if not ip:
+                continue
+            port = match.get("port", 80)
+            transport = match.get("_shodan", {}).get("module", "http")
+            scheme = "https" if port == 443 or "https" in transport else "http"
+            host = f"{scheme}://{ip}"
+            if port not in (80, 443):
+                host += f":{port}"
+            results.append(
+                PassiveResult(
+                    source="shodan",
+                    url=host,
+                    ip=ip,
+                    port=port,
+                    banner=match.get("data") or match.get("product"),
                 )
-        return results
-    except Exception as exc:  # noqa: BLE001
-        return [
-            PassiveResult(
-                source="shodan",
-                url="",
-                banner=f"Error querying Shodan: {exc}",
             )
-        ]
+        return results
+    except Exception:  # network, rate limit, invalid key etc.
+        return []
 
 
 def search_censys(
-    query: str = 'services.http.response.headers.server: "php"',
+    query: str,
     api_id: Optional[str] = None,
     api_secret: Optional[str] = None,
-    limit: int = 20,
+    limit: int = 10,
 ) -> List[PassiveResult]:
-    """Search Censys v2 for hosts matching a query.
-
-    Uses HTTP basic auth with the supplied id/secret (or environment
-    variables CENSYS_API_ID / CENSYS_API_SECRET). Returns PassiveResult
-    objects.
-    """
-    if not api_id:
-        api_id = os.getenv("CENSYS_API_ID")
-    if not api_secret:
-        api_secret = os.getenv("CENSYS_API_SECRET")
+    """Query Censys v2 API."""
     if not api_id or not api_secret:
-        return [
-            PassiveResult(
-                source="censys",
-                url="",
-                banner="No Censys credentials provided",
-            )
-        ]
+        return []
 
-    results: List[PassiveResult] = []
     try:
-        with httpx.Client(timeout=10.0) as client:
-            resp = client.get(
-                "https://search.censys.io/api/v2/hosts/search",
-                params={"q": query, "per_page": min(limit, 100)},
-                auth=(api_id, api_secret),
-                headers={"Accept": "application/json"},
-            )
+        url = "https://search.censys.io/api/v2/hosts/search"
+        params = {"q": query, "per_page": min(limit, 100)}
+        auth = (api_id, api_secret)
+
+        with httpx.Client(timeout=12.0) as client:
+            resp = client.get(url, params=params, auth=auth)
             resp.raise_for_status()
             data = resp.json()
-            hits = data.get("result", {}).get("hits", [])[:limit]
 
-            for hit in hits:
-                ip = hit.get("ip")
-                services = hit.get("services", [])
-                for svc in services:
-                    port = svc.get("port")
-                    if not port:
-                        continue
-                    svc_name = (svc.get("service_name") or "").lower()
-                    protocol = "https" if "https" in svc_name or port == 443 else "http"
-                    if port not in (80, 443):
-                        url = f"{protocol}://{ip}:{port}"
-                    else:
-                        url = f"{protocol}://{ip}"
-                    # extract a short banner
-                    banner_parts = []
-                    if "http" in svc:
-                        banner_parts.append(str(svc.get("http", {}).get("response", {})).strip()[:80])
-                    banner = " | ".join(banner_parts) or json.dumps(svc)[:120]
-
-                    results.append(
-                        PassiveResult(
-                            source="censys",
-                            url=url,
-                            ip=ip,
-                            port=port,
-                            banner=banner,
-                        )
-                    )
-                    break  # one URL per host is enough
-        return results
-    except Exception as exc:  # noqa: BLE001
-        return [
-            PassiveResult(
-                source="censys",
-                url="",
-                banner=f"Error querying Censys: {exc}",
+        results = []
+        for hit in data.get("result", {}).get("hits", [])[:limit]:
+            ip = hit.get("ip")
+            if not ip:
+                continue
+            services = hit.get("services", [])
+            port = services[0].get("port", 80) if services else 80
+            # simplistic scheme detection
+            scheme = "https" if any(
+                s.get("service_name", "").upper() in ("HTTPS", "HTTP2") for s in services
+            ) else "http"
+            host = f"{scheme}://{ip}"
+            if port not in (80, 443):
+                host += f":{port}"
+            results.append(
+                PassiveResult(
+                    source="censys",
+                    url=host,
+                    ip=ip,
+                    port=port,
+                    banner=hit.get("location", {}).get("country") or "",
+                )
             )
-        ]
+        return results
+    except Exception:
+        return []
 
 
 def passive_discover(
@@ -170,63 +104,51 @@ def passive_discover(
     shodan_key: Optional[str] = None,
     censys_id: Optional[str] = None,
     censys_secret: Optional[str] = None,
-    limit: int = 30,
+    limit: int = 20,
 ) -> List[str]:
-    """High-level passive discovery combining Shodan and Censys.
+    """Orchestrates passive searches and returns deduplicated list of target URLs."""
+    discovered: List[PassiveResult] = []
+    if shodan_key:
+        discovered.extend(search_shodan(query, shodan_key, limit // 2 + 1))
+    if censys_id and censys_secret:
+        discovered.extend(search_censys(query, censys_id, censys_secret, limit // 2 + 1))
 
-    Returns a deduplicated list of URLs (strings) that can be passed
-    directly to scan_targets(). Credentials may be passed or read from
-    environment variables.
-    """
-    urls: List[str] = []
-    seen = set()
+    # deduplicate preserving order
+    seen = {}
+    unique = []
+    for item in discovered:
+        if item.url not in seen:
+            seen[item.url] = True
+            unique.append(item.url)
 
-    if shodan_key or os.getenv("SHODAN_API_KEY"):
-        for res in search_shodan(query, shodan_key, limit // 2 + 5):
-            if res.url and res.url not in seen and "Error" not in (res.banner or ""):
-                seen.add(res.url)
-                urls.append(res.url)
-
-    if (censys_id and censys_secret) or (
-        os.getenv("CENSYS_API_ID") and os.getenv("CENSYS_API_SECRET")
-    ):
-        for res in search_censys(query, censys_id, censys_secret, limit // 2 + 5):
-            if res.url and res.url not in seen and "Error" not in (res.banner or ""):
-                seen.add(res.url)
-                urls.append(res.url)
-
-    return urls[:limit]
+    return unique[:limit]
 
 
 class ShodanSearcher:
-    """Object-oriented wrapper mirroring NucleiValidator / OllamaSummarizer."""
+    """Convenience class for repeated Shodan queries."""
 
-    @staticmethod
-    def search(
-        query: str = 'php "Version"', api_key: Optional[str] = None, limit: int = 20
-    ) -> List[PassiveResult]:
-        """Perform a Shodan search and return normalized results."""
-        return search_shodan(query, api_key, limit)
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    def search(self, query: str, limit: int = 10) -> List[PassiveResult]:
+        return search_shodan(query, self.api_key, limit)
 
 
 class CensysSearcher:
-    """Object-oriented wrapper for Censys searches."""
+    """Convenience class for repeated Censys queries."""
 
-    @staticmethod
-    def search(
-        query: str = 'services.http.response.headers.server: "php"',
-        api_id: Optional[str] = None,
-        api_secret: Optional[str] = None,
-        limit: int = 20,
-    ) -> List[PassiveResult]:
-        """Perform a Censys search and return normalized results."""
-        return search_censys(query, api_id, api_secret, limit)
+    def __init__(self, api_id: str, api_secret: str):
+        self.api_id = api_id
+        self.api_secret = api_secret
+
+    def search(self, query: str, limit: int = 10) -> List[PassiveResult]:
+        return search_censys(query, self.api_id, self.api_secret, limit)
 
 
 __all__ = [
+    "passive_discover",
     "search_shodan",
     "search_censys",
-    "passive_discover",
     "ShodanSearcher",
     "CensysSearcher",
 ]

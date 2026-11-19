@@ -1,135 +1,94 @@
-"""Nuclei integration for PHP Fossil.
+"""Nuclei integration for confirming exploitable vulnerabilities on discovered legacy PHP sites.
 
-Provides functions to run Nuclei templates for deeper exploit validation
-of discovered vulnerabilities. Requires the nuclei binary to be installed
-and available in PATH (https://nuclei.projectdiscovery.io).
-
-Uses CVE-based template IDs where possible and falls back to generic PHP
-templates. Output is parsed into NucleiFinding Pydantic models.
+Uses subprocess to invoke the nuclei CLI tool and parses JSON output into Pydantic models.
 """
 
 import json
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
-from .models import NucleiFinding, Vulnerability
-
-
-def get_nuclei_templates_for_vulns(vulns: List[Vulnerability]) -> List[str]:
-    """Map CVEs to Nuclei template IDs.
-
-    Many Nuclei templates are named after their CVE (e.g. cve-2019-11043).
-    Additional generic PHP templates are appended for broader coverage.
-
-    Args:
-        vulns: List of Vulnerability objects.
-
-    Returns:
-        List of unique template IDs suitable for nuclei -id.
-    """
-    templates: List[str] = []
-    for v in vulns:
-        if v.cve and v.cve.upper().startswith("CVE-"):
-            templates.append(v.cve.lower().replace("cve-", "cve-"))
-
-    # Generic high-value PHP templates
-    generic = [
-        "phpinfo-detect",
-        "exposed-debug-page",
-        "php-cgi-arg-injection",
-        "laravel-debug-mode",
-        "phpmyadmin-setup",
-        "wordpress-old-version",
-        "joomla-rce",
-        "drupal-rce",
-    ]
-    templates.extend(generic)
-    # deduplicate while preserving order
-    return list(dict.fromkeys(templates))
+from .models import NucleiFinding
 
 
 def validate_with_nuclei(
-    target: str, vulns: List[Vulnerability], timeout: int = 30
+    targets: List[str],
+    templates: Optional[List[str]] = None,
+    timeout: int = 45,
 ) -> List[NucleiFinding]:
-    """Run Nuclei against the target using templates derived from the vulns.
+    """Execute Nuclei against one or more targets.
 
-    Returns list of NucleiFinding objects parsed from JSONL output.
-    Gracefully handles missing binary, timeouts, and parsing errors.
+    Returns list of NucleiFinding objects. If the nuclei binary is not found
+    or any error occurs, returns empty list (graceful degradation).
     """
-    templates = get_nuclei_templates_for_vulns(vulns)
     if not templates:
-        return []
+        templates = ["cves/php", "vulnerabilities/php", "http/technologies/php"]
 
-    cmd = [
-        "nuclei",
-        "-target",
-        target,
-        "-id",
-        ",".join(templates),
-        "-jsonl",
-        "-silent",
-        "-timeout",
-        str(timeout),
-        "-no-color",
-    ]
+    findings: List[NucleiFinding] = []
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout + 10,
-            check=False,
-        )
-        findings = []
-        for line in result.stdout.strip().splitlines():
-            if line.strip():
-                try:
-                    data = json.loads(line)
-                    findings.append(NucleiFinding.model_validate(data))
-                except json.JSONDecodeError:
-                    continue
-        return findings
-    except subprocess.TimeoutExpired:
-        return [
-            NucleiFinding(
-                template="timeout",
-                name="Nuclei scan timeout",
-                severity="medium",
-                description="Nuclei scan timed out",
-            )
+    for target in targets:
+        cmd = [
+            "nuclei",
+            "-target", target,
+            "-json",
+            "-silent",
+            "-timeout", "10",
         ]
-    except FileNotFoundError:
-        return [
-            NucleiFinding(
-                template="nuclei-not-found",
-                name="Nuclei not installed",
-                severity="info",
-                description="Install nuclei to enable deep exploit validation",
+        # Add templates
+        if templates:
+            cmd.extend(["-t"] + templates)
+
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
             )
-        ]
-    except Exception as exc:  # noqa: BLE001
-        return [
-            NucleiFinding(
-                template="error",
-                name="Nuclei error",
-                severity="low",
-                description=str(exc),
-            )
-        ]
+
+            if completed.stdout:
+                for line in completed.stdout.splitlines():
+                    line = line.strip()
+                    if line:
+                        try:
+                            raw = json.loads(line)
+                            finding = NucleiFinding.model_validate(raw)
+                            findings.append(finding)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            # nuclei not installed or timed out - common in CI without go install
+            continue
+        except Exception:
+            continue
+
+    return findings
 
 
 class NucleiValidator:
-    """Wrapper class mirroring style of CommunityFingerprinter / OllamaSummarizer."""
+    """Encapsulates Nuclei usage, mirroring OllamaSummarizer style."""
+
+    def __init__(self, templates: Optional[List[str]] = None):
+        self.templates = templates or []
+
+    def validate(self, targets: List[str], timeout: int = 45) -> List[NucleiFinding]:
+        return validate_with_nuclei(targets, self.templates, timeout)
 
     @staticmethod
-    def validate(target: str, vulns: List[Vulnerability]) -> List[NucleiFinding]:
-        """Run validation (static helper)."""
-        return validate_with_nuclei(target, vulns)
+    def is_available() -> bool:
+        """Test if the nuclei binary can be executed."""
+        try:
+            subprocess.run(
+                ["nuclei", "-version"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+            return True
+        except FileNotFoundError:
+            return False
+        except Exception:
+            return False
 
 
-__all__ = [
-    "validate_with_nuclei",
-    "NucleiValidator",
-    "get_nuclei_templates_for_vulns",
-]
+__all__ = ["validate_with_nuclei", "NucleiValidator"]

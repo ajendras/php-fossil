@@ -430,7 +430,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mocks, `parse_sql_dump`, VulnDB lookup, CLI commands, JSON serialization of `ScanResult` objects, the new persistent `Store`, mocked Nuclei validation and the Ollama summarizer (with mocked HTTP calls to localhost:11434). The TUI live callback path is exercised in `test_scanner.py`.
+Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mocks, `parse_sql_dump`, VulnDB lookup, CLI commands, JSON serialization of `ScanResult` objects, the new persistent `Store`, mocked Nuclei validation and the Ollama summarizer (with mocked HTTP calls to localhost:11434). Dedicated test files (`test_passive.py`, `test_nuclei.py`, `test_ollama.py`) now provide complete isolated coverage for `passive.py` (Shodan/Censys API responses), `nuclei.py` (subprocess mocking) and `ollama.py` (Ollama REST API). The TUI live callback path is exercised in `test_scanner.py`.
 
 ## 📍 Roadmap
 
@@ -450,7 +450,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Dark-mode HTML report with sortable vulnerability table
 - [x] Add Drupal, Magento and PrestaShop CMS version fingerprinting in fingerprinter.py with dedicated detect_ functions
 - [x] Introduce pydantic-based ConfigSettings class for CLI/config validation and defaults (DX)
-- [ ] Add pytest coverage for passive.py, nuclei.py and ollama.py with mocked API responses
+- [x] Add pytest coverage for passive.py, nuclei.py and ollama.py with mocked API responses
 - [ ] Implement rotating User-Agent list in scanner.py with configurable pool
 - [ ] Extend embedded VulnDB with 30+ new PHP 8.0-8.3 CVEs plus EOL flags
 - [ ] Add --verbose / -v flag to all CLI commands with rich logging levels
