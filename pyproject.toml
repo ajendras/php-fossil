@@ -53,5 +53,5 @@ phpfossil = ["*.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-q --tb=no"
+addopts = "-q --tb=short -ra"
 asyncio_default_fixture_loop_scope = "function"
