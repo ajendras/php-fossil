@@ -1,217 +1,201 @@
-"""Async target scanner with rate limiting and modular detection.
+"""PHP Fossil Async Scanner.
 
-The main entrypoint is the `scan_targets()` function. It accepts a list of URLs
-and an optional ConfigSettings instance (or legacy dict). All configuration is
-validated by the pydantic ConfigSettings model, providing defaults, constraints
-and improved DX. Delegates to fingerprinter, vulndb, schema, nuclei and ollama
-modules.
+Handles concurrent scanning of targets with rate limiting, proxy rotation,
+fingerprinting, vuln mapping, schema extraction, optional Nuclei and Ollama
+integration, community fingerprints and live callbacks.
 """
 
 import asyncio
-from typing import Any, Callable, Dict, List, Optional, Union
+from collections.abc import Callable
+from itertools import cycle
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
 from .fingerprinter import (
+    CommunityFingerprinter,
+    detect_from_phpinfo,
     detect_php_version,
-    load_community_fingerprints,
-    detect_cms_version,
 )
-from .models import (
-    ConfigSettings,
-    ScanResult,
-    Vulnerability,
-    ExposedFile,
-    SchemaResult,
-)
-from .vulndb import get_vulns_for_version
-from .schema import parse_sql_dump
+from .models import ConfigSettings, ExposedFile, ScanResult
 from .nuclei import validate_with_nuclei
-from .ollama import generate_summary, is_ollama_available
+from .ollama import generate_summary
+from .schema import locate_sql_urls, parse_sql_dump
+from .vulndb import get_vulns_for_version
 
 
 class AsyncScanner:
-    """Main scanner class. Accepts ConfigSettings for validated config with defaults."""
+    """Main scanner class supporting all PHP Fossil detection features."""
 
-    def __init__(self, config: Optional[Union[ConfigSettings, Dict[str, Any]]] = None):
-        if isinstance(config, ConfigSettings):
-            self.config = config
-        elif isinstance(config, dict) or config is None:
-            self.config = ConfigSettings(**(config or {}))
+    def __init__(self, config: Optional[Union[ConfigSettings, dict]] = None) -> None:
+        if isinstance(config, dict):
+            self.config = ConfigSettings.model_validate(config)
         else:
-            self.config = ConfigSettings()
+            self.config = config or ConfigSettings()
 
     async def scan(
-        self, targets: List[str], callback: Optional[Callable[[ScanResult], None]] = None
+        self,
+        targets: List[str],
+        callback: Optional[Callable[[ScanResult], None]] = None,
     ) -> List[ScanResult]:
-        """Scan multiple targets concurrently with rate limiting."""
-        semaphore = asyncio.Semaphore(self.config.max_concurrency)
-        results: List[ScanResult] = []
+        """Scan multiple targets asynchronously with concurrency control."""
+        if not targets:
+            return []
 
-        limits = httpx.Limits(max_connections=self.config.max_concurrency)
+        semaphore = asyncio.Semaphore(self.config.max_concurrency)
+        proxies = self.config.proxies or [None]
+        proxy_cycle = cycle(proxies)
+
         async with httpx.AsyncClient(
-            timeout=self.config.timeout,
+            timeout=httpx.Timeout(self.config.timeout),
             follow_redirects=True,
-            limits=limits,
-            proxies=self.config.proxies if self.config.proxies else None,
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
         ) as client:
             tasks = [
-                asyncio.create_task(
-                    self._scan_single(target, client, semaphore, callback)
+                self._probe_target(
+                    client, target, next(proxy_cycle), semaphore, callback
                 )
                 for target in targets
             ]
-            for completed in asyncio.as_completed(tasks):
-                result = await completed
-                results.append(result)
-                if callback:
-                    callback(result)
-        return results
+            return await asyncio.gather(*tasks)
 
-    async def _scan_single(
+
+    async def _probe_target(
         self,
-        url: str,
         client: httpx.AsyncClient,
+        target: str,
+        proxy: Optional[str],
         semaphore: asyncio.Semaphore,
-        callback: Optional[Callable[[ScanResult], None]] = None,
+        callback: Optional[Callable[[ScanResult], None]],
     ) -> ScanResult:
-        """Probe a single target and enrich with fingerprint, vulns, schema, nuclei, ollama."""
+        """Probe a single target URL."""
         async with semaphore:
-            if not url.startswith(("http://", "https://")):
-                url = f"https://{url}"
-            result = ScanResult(url=url)
+            if not target.startswith(("http://", "https://")):
+                target = "https://" + target.lstrip("/")
 
+            result = ScanResult(url=target)
             try:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                headers = dict(resp.headers)
-                body = resp.text
+                kwargs = {"proxy": proxy} if proxy else {}
+                response = await client.get(target, **kwargs)
+                response.raise_for_status()
 
-                result.detected_from = []
+                headers = dict(response.headers)
+                body = response.text
+                result.detected_from.extend(["headers", "body"])
 
-                # Community fingerprints if enabled
                 community_rules = None
                 if self.config.use_community_fingerprints:
-                    community_rules = load_community_fingerprints(
+                    community_rules = CommunityFingerprinter.load(
                         self.config.community_repo_url
                     )
 
-                # Version fingerprinting
-                version = detect_php_version(
+                php_version = detect_php_version(
                     headers=headers,
                     body=body,
                     community_rules=community_rules,
                 )
-                if version:
-                    result.php_version = version
-                    result.detected_from.append("headers/body/fingerprint")
-                    result.vulns = get_vulns_for_version(version)
+                if php_version:
+                    result.php_version = php_version
+                    result.vulns = get_vulns_for_version(php_version)
 
-                # CMS detection as extra signal
-                cms_info = detect_cms_version(body)
-                if cms_info:
-                    result.detected_from.append(f"cms:{cms_info[0]}")
-
-                # Exposed file and schema detection
-                for path in [
-                    "phpinfo.php",
-                    "info.php",
-                    "test.php",
-                    ".env",
-                    "dump.sql",
-                    "backup.sql",
-                    "schema.sql",
-                ]:
+                # Check for phpinfo-style pages
+                for path in ("phpinfo.php", "info.php", "phpinfo"):
                     try:
-                        file_url = f"{url.rstrip('/')}/{path}"
-                        fresp = await client.get(file_url, timeout=5.0)
-                        if fresp.status_code == 200 and len(fresp.text.strip()) > 30:
-                            ftype = (
-                                "phpinfo"
-                                if "phpinfo" in path or "info" in path
-                                else "sql_dump"
-                                if any(x in path for x in ("sql", "dump", "schema"))
-                                else "exposed"
-                            )
-                            preview = fresp.text[:180].replace("\n", " ").strip()
+                        info_url = f"{target.rstrip('/')}/{path}"
+                        info_resp = await client.get(info_url, **kwargs)
+                        if any(
+                            keyword in info_resp.text
+                            for keyword in ("PHP Version", "phpinfo()", "Zend")
+                        ):
                             result.exposed_files.append(
                                 ExposedFile(
-                                    url=file_url,
-                                    file_type=ftype,
-                                    content_preview=preview,
+                                    url=str(info_resp.url),
+                                    file_type="phpinfo",
+                                    content_preview=info_resp.text[:500],
                                 )
                             )
-                            if ftype == "sql_dump":
-                                try:
-                                    parsed = parse_sql_dump(fresp.text)
-                                    if isinstance(parsed, dict):
-                                        result.db_schema = SchemaResult(
-                                            tables=parsed.get("tables", []),
-                                            columns=parsed.get("columns", {}),
-                                            row_counts=parsed.get("row_counts", {}),
-                                        )
-                                    else:
-                                        result.db_schema = parsed
-                                except Exception:  # noqa: BLE001
-                                    result.db_schema = SchemaResult()
+                            if not result.php_version:
+                                pv = detect_from_phpinfo(info_resp.text)
+                                if pv:
+                                    result.php_version = pv
+                                    result.vulns = get_vulns_for_version(pv)
                     except Exception:  # noqa: BLE001
                         continue
 
-                # Nuclei validation if enabled and vulns present
-                if self.config.use_nuclei and result.vulns:
-                    result.nuclei_findings = validate_with_nuclei(
-                        result.url, result.vulns, timeout=self.config.timeout
-                    )
+                # Schema extraction
+                for sql_url in locate_sql_urls(body):
+                    try:
+                        sql_resp = await client.get(sql_url, **kwargs)
+                        if sql_resp.is_success and "CREATE TABLE" in sql_resp.text.upper():
+                            schema = parse_sql_dump(sql_resp.text)
+                            result.db_schema = schema
+                            result.exposed_files.append(
+                                ExposedFile(
+                                    url=sql_url,
+                                    file_type="sql_dump",
+                                    content_preview=sql_resp.text[:300],
+                                )
+                            )
+                            break
+                    except Exception:  # noqa: BLE001
+                        continue
 
-                # Ollama summary if enabled and issues found
-                if self.config.use_ollama and (result.is_vulnerable() or result.exposed_files):
-                    if is_ollama_available():
+                # Nuclei integration
+                if (
+                    self.config.use_nuclei
+                    and result.php_version
+                    and result.php_version.startswith(("5.", "7.0", "7.1", "7.2", "7.3", "7.4"))
+                ):
+                    findings = validate_with_nuclei(target, result.php_version)
+                    if findings:
+                        result.nuclei_findings = findings
+
+                # Ollama summarization
+                if self.config.use_ollama and (result.vulns or result.exposed_files or result.nuclei_findings):
+                    try:
                         result.llm_summary = generate_summary(
                             [result], model=self.config.ollama_model
                         )
-                    else:
-                        result.llm_summary = (
-                            "Ollama not available. Start with `ollama serve`."
-                        )
+                    except Exception as exc:  # noqa: BLE001
+                        result.errors.append(f"LLM summary failed: {exc}")
 
-                # Demo fallback for legacy PHP when no vulns detected by DB
-                if (
-                    not result.vulns
-                    and result.php_version
-                    and result.php_version.startswith(("5.", "7."))
-                ):
-                    result.vulns = get_vulns_for_version(result.php_version) or [
-                        Vulnerability(
-                            cve="CVE-2019-11043",
-                            title="PHP-FPM RCE example",
-                            severity="high",
-                            description="Example vulnerability for legacy PHP versions.",
-                            fixed_in="7.4.33",
-                            reference="https://github.com/php/php-src/pull/4760",
-                        )
-                    ]
+                if callback is not None:
+                    callback(result)
 
-            except httpx.RequestError as exc:
-                result.errors.append(f"Request error: {exc}")
+                return result
+
+            except httpx.HTTPError as exc:
+                result.errors.append(f"HTTP error: {exc}")
+                return result
             except Exception as exc:  # noqa: BLE001
                 result.errors.append(str(exc))
-
-            return result
+                return result
 
 
 async def scan_targets(
     targets: List[str],
-    config: Optional[Union[Dict[str, Any], ConfigSettings]] = None,
+    config: Optional[Union[ConfigSettings, Dict[str, Any]]] = None,
     callback: Optional[Callable[[ScanResult], None]] = None,
 ) -> List[ScanResult]:
     """Public async entrypoint for scanning targets.
 
-    Accepts either a ConfigSettings instance (preferred, validated with defaults)
-    or a legacy dict. Returns list of ScanResult objects. All scans are
-    automatically persisted by the caller via store_results().
+    Accepts config as dict (legacy), ConfigSettings instance or None (uses defaults).
+    Results are automatically stored in the history DB.
     """
-    scanner = AsyncScanner(config=config)
-    return await scanner.scan(targets, callback=callback)
+    scanner = AsyncScanner(config)
+    results = await scanner.scan(targets, callback)
+
+    # auto-persist (import here avoids potential circular imports)
+    from .store import store_results
+    store_results(results)
+    return results
 
 
-__all__ = ["scan_targets", "AsyncScanner"]
+def scan_targets_direct(
+    targets: List[str], config: Optional[Union[ConfigSettings, dict]] = None
+) -> List[ScanResult]:
+    """Synchronous wrapper used by some tests."""
+    return asyncio.run(scan_targets(targets, config))
+
+
+__all__ = ["scan_targets", "AsyncScanner", "scan_targets_direct"]

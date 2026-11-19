@@ -211,7 +211,9 @@ class ConfigSettings(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def coerce_legacy_dict(cls, data: Any) -> Any:
-        """Support legacy dicts that might use 'concurrency' key."""
+        """Support legacy dicts that might use 'concurrency' key and None default."""
+        if data is None:
+            return {}
         if isinstance(data, dict):
             data = data.copy()
             if "concurrency" in data and "max_concurrency" not in data:
