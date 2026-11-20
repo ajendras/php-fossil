@@ -30,6 +30,8 @@ DEFAULT_USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
 ]
 
+DEFAULT_COMMUNITY_REPO_URL = "https://raw.githubusercontent.com/ajendras/php-fossil/main/community-fingerprints.json"
+
 
 class Vulnerability(BaseModel):
     """Represents a known vulnerability tied to a PHP version."""
@@ -38,315 +40,129 @@ class Vulnerability(BaseModel):
     title: str = Field(..., description="Short title of the vulnerability")
     severity: str = Field(..., description="Severity: critical, high, medium, low")
     description: str = Field(..., description="Detailed description")
-    fixed_in: Optional[str] = Field(
-        None, description="Version in which the issue was fixed"
-    )
-    reference: Optional[str] = Field(None, description="External reference URL")
-
-    @field_validator("severity")
-    @classmethod
-    def validate_severity(cls, v: str) -> str:
-        allowed = {"critical", "high", "medium", "low"}
-        if v.lower() not in allowed:
-            raise ValueError(f"severity must be one of {allowed}")
-        return v.lower()
+    fixed_in: Optional[str] = Field(None, description="Version that fixes the issue")
+    references: List[str] = Field(default_factory=list, description="Links to advisories")
 
 
 class ExposedFile(BaseModel):
-    """Represents a sensitive file discovered on a target (phpinfo, SQL dump, etc)."""
+    """Represents an exposed sensitive file (e.g. SQL dump)."""
 
-    url: str = Field(..., description="Full URL to the exposed file")
-    file_type: str = Field(..., description="Type: phpinfo, sql_dump, backup, etc.")
-    content_preview: Optional[str] = Field(
-        None, description="Truncated preview of file content"
-    )
+    url: str
+    content_type: str = "text/plain"
+    size: Optional[int] = None
+    snippet: Optional[str] = None
 
 
 class SchemaResult(BaseModel):
-    """Parsed information from an exposed SQL dump."""
+    """Parsed database schema from an SQL dump."""
 
-    tables: List[str] = Field(default_factory=list)
-    columns: Dict[str, List[str]] = Field(default_factory=dict)
-    row_counts: Dict[str, int] = Field(default_factory=dict)
+    tables: List[Dict[str, Any]] = Field(default_factory=list)
+    raw_tables: int = 0
+    sensitive_columns: List[str] = Field(default_factory=list)
 
 
 class NucleiFinding(BaseModel):
-    """Represents a finding returned by a Nuclei scan."""
+    """Result from a Nuclei template run."""
 
-    template: str = Field(..., description="Nuclei template ID that matched")
-    name: str = Field(..., description="Name of the template")
-    severity: str = Field(..., description="Severity reported by Nuclei")
-    matched_at: Optional[str] = Field(
-        None, alias="matched-at", description="URL where match occurred"
-    )
-    description: Optional[str] = Field(None, description="Optional description")
-    type: Optional[str] = Field(None, description="Type of check (http, etc)")
-
-    model_config = ConfigDict(
-        extra="allow",
-        populate_by_name=True,
-    )
-
-    @field_validator("severity")
-    @classmethod
-    def validate_severity(cls, v: str) -> str:
-        allowed = {"critical", "high", "medium", "low", "info", "unknown"}
-        if v.lower() not in allowed:
-            return "medium"
-        return v.lower()
-
-
-class FingerprintRule(BaseModel):
-    """Rule for community-sourced version fingerprinting.
-
-    Allows the community to contribute new detection patterns without changing
-    the core code. Rules are loaded from a JSON array at a configurable URL.
-    """
-
-    type: str = Field(
-        ..., description="Detection vector: header, body, phpinfo, error_page"
-    )
-    pattern: str = Field(..., description="Regular expression pattern")
-    version_group: int = Field(
-        1, description="Capturing group index that holds the version string"
-    )
-    cms: Optional[str] = Field(
-        None, description="If set, restricts this rule to a specific CMS"
-    )
-    description: Optional[str] = Field(None, description="Optional description of the rule")
-
-    model_config = ConfigDict(extra="forbid")
-
-    @field_validator("type")
-    @classmethod
-    def validate_type(cls, v: str) -> str:
-        allowed = {"header", "body", "phpinfo", "error_page"}
-        if v not in allowed:
-            raise ValueError(f"type must be one of {allowed}")
-        return v
+    template: str
+    name: str
+    severity: str
+    description: Optional[str] = None
+    reference: Optional[str] = None
 
 
 class PassiveResult(BaseModel):
-    """Normalized result from a passive discovery service (Shodan or Censys)."""
+    """Result from passive reconnaissance (Shodan/Censys)."""
 
-    source: str = Field(..., description="The service used: shodan or censys")
-    url: str = Field(..., description="Discovered URL ready for scanning")
-    ip: Optional[str] = Field(None, description="IP address of host")
-    port: Optional[int] = Field(None, description="Discovered port")
-    banner: Optional[str] = Field(
-        None, description="Service banner or snippet from response"
-    )
-    timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
-
-
-DEFAULT_COMMUNITY_REPO_URL = (
-    "https://raw.githubusercontent.com/ajendras/php-fossil/main/community-fingerprints.json"
-)
-
-
-class ConfigSettings(BaseModel):
-    """Pydantic-based configuration with built-in validation, defaults and DX improvements.
-
-    Replaces raw dicts for scan_targets(), CLI commands and library usage.
-    Supports direct instantiation, .model_dump() for backward compatibility,
-    field constraints, and environment-aware defaults where applicable.
-    """
-
-    max_concurrency: int = Field(
-        default=20,
-        ge=1,
-        le=50,
-        description="Maximum simultaneous HTTP requests (capped at 50)",
-    )
-    timeout: int = Field(
-        default=12,
-        ge=5,
-        le=60,
-        description="HTTP request timeout in seconds",
-    )
-    proxies: List[str] = Field(
-        default_factory=list,
-        description="Optional list of proxy URLs for rotating requests",
-    )
-    user_agents: List[str] = Field(
-        default_factory=lambda: DEFAULT_USER_AGENTS,
-        description="Rotating pool of User-Agent strings. Improves evasion; empty list falls back to built-in defaults.",
-    )
-    use_nuclei: bool = Field(
-        default=False,
-        description="Enable Nuclei for deeper exploit validation (requires nuclei binary)",
-    )
-    use_ollama: bool = Field(
-        default=False,
-        description="Enable local Ollama LLM for natural-language summaries",
-    )
-    ollama_model: str = Field(
-        default="llama3",
-        description="Ollama model name to use for summarization",
-    )
-    use_community_fingerprints: bool = Field(
-        default=False,
-        description="Whether to load and apply community-sourced fingerprint rules from a JSON repository",
-    )
-    community_repo_url: str = Field(
-        default=DEFAULT_COMMUNITY_REPO_URL,
-        description="URL or local path to community fingerprint JSON (array of rule objects)",
-    )
-    db_path: Optional[Path] = Field(
-        default=None,
-        description="Path to persistent SQLite database for scan history",
-    )
-    shodan_api_key: Optional[str] = Field(
-        default=None,
-        description="Shodan API key (falls back to SHODAN_API_KEY environment variable)",
-    )
-    censys_api_id: Optional[str] = Field(
-        default=None,
-        description="Censys API ID (falls back to CENSYS_API_ID environment variable)",
-    )
-    censys_api_secret: Optional[str] = Field(
-        default=None,
-        description="Censys API secret (falls back to CENSYS_API_SECRET environment variable)",
-    )
-
-    model_config = ConfigDict(
-        extra="forbid",
-        validate_assignment=True,
-        populate_by_name=True,
-    )
-
-    def get_db_path(self) -> Path:
-        """Return resolved database path, using default ~/.phpfossil/history.db when unset."""
-        if self.db_path is None:
-            return Path.home() / ".phpfossil" / "history.db"
-        return self.db_path
-
-    @model_validator(mode="before")
-    @classmethod
-    def coerce_legacy_dict(cls, data: Any) -> Any:
-        """Support legacy dicts that might use 'concurrency' key and None default."""
-        if data is None:
-            return {}
-        if isinstance(data, dict):
-            data = data.copy()
-            if "concurrency" in data and "max_concurrency" not in data:
-                data["max_concurrency"] = data.pop("concurrency")
-        return data
+    url: str
+    source: str
+    port: int = 80
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    raw: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ScanResult(BaseModel):
-    """Result of scanning one target."""
+    """Complete scan outcome for a single target."""
 
-    model_config = ConfigDict(
-        protected_namespaces=(),
-        populate_by_name=True,
-    )
-
-    url: str = Field(..., description="The scanned URL")
-    php_version: Optional[str] = Field(
-        None, description="Detected PHP version string e.g. '7.4.33'"
-    )
-    detected_from: List[str] = Field(
-        default_factory=list, description="Sources that contributed to detection"
-    )
+    url: str
+    php_version: Optional[str] = None
+    detected_from: List[str] = Field(default_factory=list)
     vulns: List[Vulnerability] = Field(default_factory=list)
     exposed_files: List[ExposedFile] = Field(default_factory=list)
-    db_schema: Optional[SchemaResult] = Field(
-        default=None,
-        description="Parsed information from an exposed SQL dump",
-    )
-    nuclei_findings: List[NucleiFinding] = Field(
-        default_factory=list,
-        description="Validated exploit findings from Nuclei",
-    )
-    llm_summary: Optional[str] = Field(
-        default=None,
-        description="Natural language summary generated by local Ollama LLM",
-    )
-    errors: List[str] = Field(default_factory=list)
+    db_schema: Optional[SchemaResult] = None
+    nuclei_findings: List[NucleiFinding] = Field(default_factory=list)
+    llm_summary: Optional[str] = None
     scan_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    risk_score: int = 0
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def is_vulnerable(self) -> bool:
-        """Return True if any vulnerabilities were found."""
-        return len(self.vulns) > 0
-
-    def has_nuclei_confirmations(self) -> bool:
-        """Return True if Nuclei confirmed any exploitable issues."""
-        return len(self.nuclei_findings) > 0
+        """Return True if the target has known vulnerabilities or confirmed exploits."""
+        return bool(self.vulns) or bool(self.nuclei_findings)
 
     @computed_field
     @property
-    def risk_score(self) -> int:
-        """0-100 risk score. Increases significantly when sensitive database
-        schemas (users, payments, admin tables, large row counts) are exposed.
-        """
-        score = 0
-
-        # Vulnerability contribution
-        severity_map = {
-            "critical": 35,
-            "high": 25,
-            "medium": 15,
-            "low": 5,
-        }
-        for vuln in self.vulns:
-            score += severity_map.get(vuln.severity, 15)
-
-        # Nuclei confirmation bonus
-        high_nuclei = sum(
-            1
-            for f in self.nuclei_findings
-            if f.severity in ("critical", "high")
-        )
-        score += high_nuclei * 12
-
-        # Exposed schema sensitivity
-        if self.db_schema is not None and self.db_schema.tables:
-            sensitive_patterns = {
-                "user", "admin", "login", "password", "passwd", "credential",
-                "account", "payment", "card", "ccnum", "order", "customer",
-                "personal", "private", "secret", "config", "email", "auth",
-            }
-            sensitive_count = 0
-            for table_name in self.db_schema.tables:
-                lower_name = table_name.lower()
-                for pattern in sensitive_patterns:
-                    if pattern in lower_name:
-                        sensitive_count += 1
-                        break
-            if sensitive_count > 0:
-                score += 20 + (sensitive_count * 8)
-
-            # Row count sensitivity
-            if self.db_schema.row_counts:
-                large_tables = sum(
-                    1 for count in self.db_schema.row_counts.values() if count > 500
-                )
-                score += large_tables * 7
-
-        # Minimum score if vulnerable or schema exposed
-        if self.is_vulnerable() or (self.db_schema and self.db_schema.tables):
-            score = max(score, 35)
-
-        return min(score, 100)
+    def risk_summary(self) -> str:
+        if self.risk_score >= 70:
+            return "critical"
+        if self.risk_score >= 40:
+            return "high"
+        if self.risk_score >= 20:
+            return "medium"
+        return "low"
 
     @field_validator("php_version")
     @classmethod
-    def validate_php_version(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return None
-        if not re.match(r"^\d+\.\d+(\.\d+)?$", v.strip()):
-            raise ValueError("PHP version must match pattern X.Y or X.Y.Z")
-        return v.strip()
-
-    @field_validator("url")
-    @classmethod
-    def validate_url(cls, v: str) -> str:
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("URL must start with http:// or https://")
+    def validate_version(cls, v: Optional[str]) -> Optional[str]:
+        if v and not re.match(r"^\d+\.\d+(\.\d+)?$", v):
+            raise ValueError("Invalid PHP version format")
         return v
+
+
+class ConfigSettings(BaseModel):
+    """Validated configuration for scans with sensible defaults."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    max_concurrency: int = Field(default=20, ge=1, le=50)
+    timeout: int = Field(default=12, ge=5, le=60)
+    proxies: List[str] = Field(default_factory=list)
+    user_agents: List[str] = Field(default_factory=list)
+    use_nuclei: bool = False
+    use_ollama: bool = False
+    ollama_model: str = "llama3"
+    use_community_fingerprints: bool = False
+    community_repo_url: str = DEFAULT_COMMUNITY_REPO_URL
+    db_path: Optional[Path] = None
+    shodan_api_key: Optional[str] = Field(default=None, alias="shodan_api_key")
+    censys_api_id: Optional[str] = None
+    censys_api_secret: Optional[str] = None
+
+    @model_validator(mode="after")
+    def set_default_user_agents(self) -> "ConfigSettings":
+        if not self.user_agents:
+            self.user_agents = DEFAULT_USER_AGENTS[:]
+        return self
+
+    @model_validator(mode="after")
+    def set_default_db_path(self) -> "ConfigSettings":
+        if self.db_path is None:
+            self.db_path = Path.home() / ".phpfossil" / "history.db"
+        return self
+
+    @field_validator("max_concurrency")
+    @classmethod
+    def cap_concurrency(cls, v: int) -> int:
+        return min(v, 50)
+
+
+class FingerprintRule(BaseModel):
+    """Rule for community-sourced fingerprint detection."""
+
+    type: str = Field(..., pattern="^(header|body|phpinfo|error_page)$")
+    pattern: str
+    version_group: int = 1
 
 
 __all__ = [
@@ -354,10 +170,10 @@ __all__ = [
     "ExposedFile",
     "SchemaResult",
     "NucleiFinding",
-    "FingerprintRule",
     "PassiveResult",
     "ScanResult",
     "ConfigSettings",
-    "DEFAULT_COMMUNITY_REPO_URL",
+    "FingerprintRule",
     "DEFAULT_USER_AGENTS",
+    "DEFAULT_COMMUNITY_REPO_URL",
 ]
