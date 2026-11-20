@@ -30,6 +30,8 @@ from .models import (
     Vulnerability,
     PassiveResult,
     ConfigSettings,
+    DEFAULT_USER_AGENTS,
+    DEFAULT_COMMUNITY_REPO_URL,
 )
 from .scanner import scan_targets
 from .search import generate_dorks
@@ -117,4 +119,6 @@ __all__ = [
     "PassiveResult",
     # New validated configuration
     "ConfigSettings",
+    "DEFAULT_USER_AGENTS",
+    "DEFAULT_COMMUNITY_REPO_URL",
 ]

@@ -70,6 +70,16 @@ class NucleiFinding(BaseModel):
     description: Optional[str] = None
     reference: Optional[str] = None
 
+    @field_validator("severity", mode="before")
+    @classmethod
+    def normalize_severity(cls, v: Any) -> str:
+        if isinstance(v, str):
+            sev = v.lower().strip()
+            if sev not in {"critical", "high", "medium", "low", "info", "unknown"}:
+                return "medium"
+            return sev
+        return "medium"
+
 
 class PassiveResult(BaseModel):
     """Result from passive reconnaissance (Shodan/Censys)."""
