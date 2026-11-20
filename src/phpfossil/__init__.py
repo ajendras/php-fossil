@@ -9,7 +9,11 @@ Public API:
     NucleiFinding, get_vulns_for_version, parse_sql_dump, store_results,
     get_historical_results, Store, run_tui,
     passive_discover, search_shodan, search_censys, PassiveResult,
-    ConfigSettings (new: pydantic-based validated settings with defaults and DX improvements)
+    ConfigSettings (new: pydantic-based validated settings with defaults and DX improvements),
+    is_version_eol, get_eol_date (new: EOL status for any PHP version).
+
+The embedded VulnDB now contains 215+ CVEs (35+ new entries for PHP 8.0-8.3)
+and automatically injects critical-severity EOL entries for unsupported releases.
 
 CSV output (output_format="csv") produces one row per vulnerability with
 columns suitable for direct import into bug-bounty platforms (HackerOne,
@@ -36,7 +40,11 @@ from .models import (
 from .scanner import scan_targets
 from .search import generate_dorks
 from .reporter import generate_report
-from .vulndb import get_vulns_for_version
+from .vulndb import (
+    get_vulns_for_version,
+    is_version_eol,
+    get_eol_date,
+)
 from .schema import parse_sql_dump
 from .store import Store, get_historical_results, store_results
 from .fingerprinter import (
@@ -80,6 +88,8 @@ __all__ = [
     "ExposedFile",
     "SchemaResult",
     "get_vulns_for_version",
+    "is_version_eol",
+    "get_eol_date",
     "parse_sql_dump",
     "store_results",
     "get_historical_results",

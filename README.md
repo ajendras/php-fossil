@@ -25,7 +25,7 @@ Countless sites still run unsupported PHP versions (pre-8.1) riddled with known 
 
 - **Targeted discovery** — `generate_dorks()` produces precise Google/Bing/Shodan dorks for specific PHP versions and signatures
 - **Accurate fingerprinting** — Multi-vector detection via `detect_from_headers()`, `detect_from_body()`, `detect_from_phpinfo()` and error-page fallbacks
-- **Built-in intelligence** — Embedded VulnDB with 180+ CVEs, severity ratings, fix versions and references via `get_vulns_for_version()`
+- **Built-in intelligence** — Embedded VulnDB with 215+ CVEs, EOL flags for unsupported releases, severity ratings, fix versions and references via `get_vulns_for_version()`
 - **Actionable output** — `ScanResult` objects feed rich terminal tables (with risk scores), interactive HTML reports, JSON exports, CSV exports for bug-bounty platforms and prioritized at-risk lists
 
 ## 🎬 Demo
@@ -46,7 +46,7 @@ Detects exact version from headers, body, phpinfo() and error pages
 </td>
 <td>
 🛡️ <b>Vuln Database</b><br>
-Maps versions to embedded CVEs with severity and exploit links
+Maps versions to embedded CVEs (215+) with severity, exploit links and EOL flags
 </td>
 </tr>
 <tr>
@@ -460,7 +460,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Introduce pydantic-based ConfigSettings class for CLI/config validation and defaults (DX)
 - [x] Add pytest coverage for passive.py, nuclei.py and ollama.py with mocked API responses
 - [x] Implement rotating User-Agent list in scanner.py with configurable pool
-- [ ] Extend embedded VulnDB with 30+ new PHP 8.0-8.3 CVEs plus EOL flags
+- [x] Extend embedded VulnDB with 30+ new PHP 8.0-8.3 CVEs plus EOL flags
 - [ ] Add --verbose / -v flag to all CLI commands with rich logging levels
 - [ ] Include mypy and ruff in CI workflow plus .github/dependabot.yml for dependency updates
 - [ ] Add troubleshooting guide section to README.md covering Nuclei, Ollama and proxy setup
