@@ -201,7 +201,7 @@ def scan(
         typer.Option("-f", "--file", exists=True, dir_okay=False, help="File with one URL per line"),
     ] = None,
     concurrency: Annotated[int, typer.Option("--concurrency", "-c", min=5, max=100)] = 20,
-    timeout: Annotated[int, typer.Option("--timeout", min=5, max=60)] = 12,
+    timeout: Annotated[int, typer.Option("--timeout", min=1, max=60)] = 12,
     nuclei: Annotated[bool, typer.Option("--nuclei", help="Enable Nuclei for deeper exploit validation")] = False,
     ollama: Annotated[bool, typer.Option("--ollama", help="Enable Local LLM (Ollama) summaries of discovered issues")] = False,
     community: Annotated[bool, typer.Option("--community", help="Enable community fingerprint repository loader")] = False,

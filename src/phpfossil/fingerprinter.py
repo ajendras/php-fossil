@@ -2,10 +2,13 @@
 
 Pure functions that detect PHP versions from HTTP headers, response bodies,
 phpinfo() output and error pages. Used by the AsyncScanner.
+
+Now robustly accepts bytes (response.content) or str (response.text) for
+body/content parameters.
 """
 
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 from .models import DEFAULT_COMMUNITY_REPO_URL, FingerprintRule
 
@@ -43,11 +46,13 @@ def detect_from_headers(headers: Optional[Dict[str, str]] = None) -> Optional[st
     return None
 
 
-def detect_from_body(body: str) -> Optional[str]:
+def detect_from_body(body: Union[str, bytes] = "") -> Optional[str]:
     """Detect PHP version from response body text.
 
     Scans for common patterns found in phpinfo(), footer comments,
     meta tags and generated error pages.
+
+    Accepts str or bytes (bytes are decoded with utf-8).
 
     Args:
         body: Raw response body (HTML or text).
@@ -55,6 +60,9 @@ def detect_from_body(body: str) -> Optional[str]:
     Returns:
         Detected version string or None.
     """
+    if isinstance(body, (bytes, bytearray)):
+        body = body.decode("utf-8", errors="ignore")
+
     if not body or not isinstance(body, str):
         return None
 
@@ -76,10 +84,12 @@ def detect_from_body(body: str) -> Optional[str]:
     return None
 
 
-def detect_from_phpinfo(content: str) -> Optional[str]:
+def detect_from_phpinfo(content: Union[str, bytes] = "") -> Optional[str]:
     """Extract exact PHP version from a phpinfo() page.
 
     Targets the standard phpinfo() HTML table and heading format.
+
+    Accepts str or bytes (bytes are decoded with utf-8).
 
     Args:
         content: Full text of a phpinfo() response.
@@ -87,6 +97,9 @@ def detect_from_phpinfo(content: str) -> Optional[str]:
     Returns:
         Version string or None.
     """
+    if isinstance(content, (bytes, bytearray)):
+        content = content.decode("utf-8", errors="ignore")
+
     if not content or not isinstance(content, str):
         return None
 
@@ -104,10 +117,12 @@ def detect_from_phpinfo(content: str) -> Optional[str]:
     return None
 
 
-def detect_from_error_page(content: str) -> Optional[str]:
+def detect_from_error_page(content: Union[str, bytes] = "") -> Optional[str]:
     """Detect PHP version from error pages (often leaked in footer).
 
     Many PHP installations expose version on 404 or fatal error pages.
+
+    Accepts str or bytes (bytes are decoded with utf-8).
 
     Args:
         content: Body of an error response.
@@ -115,6 +130,9 @@ def detect_from_error_page(content: str) -> Optional[str]:
     Returns:
         Version string or None.
     """
+    if isinstance(content, (bytes, bytearray)):
+        content = content.decode("utf-8", errors="ignore")
+
     if not content or not isinstance(content, str):
         return None
 
@@ -145,14 +163,16 @@ def detect_from_error_page(content: str) -> Optional[str]:
 
 def detect_php_version(
     headers: Optional[Dict[str, str]] = None,
-    body: str = "",
-    phpinfo_content: str = "",
+    body: Union[str, bytes] = "",
+    phpinfo_content: Union[str, bytes] = "",
     community_rules: Optional[List["FingerprintRule"]] = None,
 ) -> Optional[str]:
     """Convenience combiner: tries headers, phpinfo, body then community rules.
 
     Order reflects reliability of each source. Community rules act as an
     extensible fallback. Used by tests and the AsyncScanner.
+
+    Accepts bytes or str for body/phpinfo_content.
     """
     if headers:
         ver = detect_from_headers(headers)
@@ -546,16 +566,19 @@ def load_community_fingerprints(
 
 def detect_with_community_rules(
     headers: Optional[Dict[str, str]] = None,
-    body: str = "",
+    body: Union[str, bytes] = "",
     rules: Optional[List[FingerprintRule]] = None,
 ) -> Optional[str]:
     """Apply community rules to detect PHP or CMS version.
 
     Rules are tried in order; first successful match wins.
+    Accepts body as str or bytes (decoded before regex).
     """
     if not rules or not isinstance(rules, list):
         return None
 
+    if isinstance(body, (bytes, bytearray)):
+        body = body.decode("utf-8", errors="ignore")
     content = body or ""
 
     for rule in rules:

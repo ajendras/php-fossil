@@ -21,6 +21,9 @@ Bugcrowd, etc).
 
 Community fingerprint repository:
     load_community_fingerprints(), CommunityFingerprinter, FingerprintRule
+
+detect_php_version and related functions now accept bytes (e.g. response.content)
+or str (response.text) for body/phpinfo_content arguments.
 """
 
 __version__ = "0.1.0"

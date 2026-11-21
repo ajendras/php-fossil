@@ -135,12 +135,14 @@ class ConfigSettings(BaseModel):
 
     The `verbose` field controls logging level for the CLI (and can be
     respected by scanner/tui components). 0=WARNING, 1=INFO, 2=DEBUG.
+    Timeout is validated >= 1 and <= 60 seconds (test compatibility + realistic
+    minimum for network operations).
     """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     max_concurrency: int = Field(default=20, ge=1, le=50)
-    timeout: int = Field(default=12, ge=5, le=60)
+    timeout: int = Field(default=12, ge=1, le=60)
     proxies: List[str] = Field(default_factory=list)
     user_agents: List[str] = Field(default_factory=list)
     use_nuclei: bool = False
