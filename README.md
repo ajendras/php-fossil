@@ -226,6 +226,8 @@ php-fossil list add --url https://legacy.example.com --version 5.6.40
 php-fossil list show
 ```
 
+All commands support the `--verbose` / `-v` flag (repeat for higher verbosity: `-v` for INFO, `-vv` for DEBUG). This configures a `RichHandler` for beautifully formatted, colorized, timestamped logs with tracebacks. Library users can call `phpfossil.cli.setup_logging()` or pass `verbose=2` in `ConfigSettings`.
+
 **Scheduled scans of your own domains (GitHub Action)**
 
 Add the workflow `.github/workflows/scheduled-scan.yml` to your repository (or copy the one from this repo). It installs PHP Fossil and Nuclei, reads a customizable list of domains, runs a scan every Monday, and uploads JSON + HTML reports as workflow artifacts.
@@ -270,6 +272,7 @@ results: list[ScanResult] = asyncio.run(scan_targets(
         "ollama_model": "llama3",
         "use_community_fingerprints": True,
         "user_agents": [],  # uses built-in rotating pool by default
+        "verbose": 1,
     },
     callback=live_callback
 ))
@@ -361,13 +364,14 @@ print(CommunityFingerprinter.detect(body="Debug: PHP Version: 7.3.12", rules=[ru
 | use_ollama        | false   | Enable local Ollama LLM for natural-language summaries of issues (requires Ollama running with a model like llama3) |
 | ollama_model      | llama3  | Ollama model name to use for summarization |
 | use_community_fingerprints | false | Whether to load and apply community-sourced fingerprint rules from a JSON repository |
+| verbose           | 0       | Verbosity level for rich logging output. Use -v for INFO messages, -vv for DEBUG. Configured with RichHandler for beautifully formatted terminal logs with tracebacks. |
 | community_repo_url | (official GitHub raw URL) | Custom URL or local path to community fingerprint JSON (array of rule objects) |
 | db_path           | ~/.phpfossil/history.db | Path to persistent SQLite database for scan history |
 | shodan_api_key    | None    | Shodan API key (or set SHODAN_API_KEY environment variable) |
 | censys_api_id     | None    | Censys API ID (or set CENSYS_API_ID environment variable) |
 | censys_api_secret | None    | Censys API secret (or set CENSYS_API_SECRET environment variable) |
 
-These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency`, `--timeout`, `--nuclei`, `--ollama` and `--community`. In the TUI the concurrency is automatically lowered to 5 for smoother live updates. Proxy rotation and Nuclei are currently only available through the library API and the new `--nuclei` flag; future CLI enhancements will expand options. The SQLite store is used automatically by `scan` and `history` commands. Ollama summaries appear in terminal reports and the HTML overview when enabled. The new TUI respects all config options via its switches. Community fingerprint rules are cached for 24h in `~/.phpfossil/community_fingerprints.json` and fall back gracefully on network issues. Shodan and Censys keys are best supplied via environment variables for security.
+These are passed via the `config` dict to `scan_targets()` or via CLI flags `--concurrency`, `--timeout`, `--nuclei`, `--ollama`, `--community`, and `--verbose`. In the TUI the concurrency is automatically lowered to 5 for smoother live updates. Proxy rotation and Nuclei are currently only available through the library API and the new `--nuclei` flag; future CLI enhancements will expand options. The SQLite store is used automatically by `scan` and `history` commands. Ollama summaries appear in terminal reports and the HTML overview when enabled. The new TUI respects all config options via its switches. Community fingerprint rules are cached for 24h in `~/.phpfossil/community_fingerprints.json` and fall back gracefully on network issues. Shodan and Censys keys are best supplied via environment variables for security.
 
 The scheduled GitHub Action uses a conservative concurrency of 5, always enables Nuclei, and skips Ollama (the fallback message is suppressed by not passing the flag). Edit the embedded `targets.txt` inside the workflow to list your own domains.
 
@@ -461,7 +465,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Add pytest coverage for passive.py, nuclei.py and ollama.py with mocked API responses
 - [x] Implement rotating User-Agent list in scanner.py with configurable pool
 - [x] Extend embedded VulnDB with 30+ new PHP 8.0-8.3 CVEs plus EOL flags
-- [ ] Add --verbose / -v flag to all CLI commands with rich logging levels
+- [x] Add --verbose / -v flag to all CLI commands with rich logging levels
 - [ ] Include mypy and ruff in CI workflow plus .github/dependabot.yml for dependency updates
 - [ ] Add troubleshooting guide section to README.md covering Nuclei, Ollama and proxy setup
 

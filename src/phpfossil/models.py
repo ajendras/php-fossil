@@ -131,7 +131,11 @@ class ScanResult(BaseModel):
 
 
 class ConfigSettings(BaseModel):
-    """Validated configuration for scans with sensible defaults."""
+    """Validated configuration for scans with sensible defaults.
+
+    The `verbose` field controls logging level for the CLI (and can be
+    respected by scanner/tui components). 0=WARNING, 1=INFO, 2=DEBUG.
+    """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -148,6 +152,7 @@ class ConfigSettings(BaseModel):
     shodan_api_key: Optional[str] = Field(default=None, alias="shodan_api_key")
     censys_api_id: Optional[str] = None
     censys_api_secret: Optional[str] = None
+    verbose: int = Field(default=0, ge=0, le=3)
 
     @model_validator(mode="after")
     def set_default_user_agents(self) -> "ConfigSettings":
