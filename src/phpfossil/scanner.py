@@ -1,72 +1,165 @@
-"""Async scanner for PHP Fossil.
+"""Async PHP scanner with rate limiting, UA rotation, proxy support and multiple detection methods.
 
-Handles concurrent, rate-limited scanning of targets with:
-- Rotating User-Agent pool (built-in default or custom)
-- Optional proxy rotation
-- Multi-source PHP version fingerprinting (headers, body, phpinfo, community rules)
-- Vulnerability mapping from embedded VulnDB
-- Detection of exposed SQL dumps + schema parsing
-- Optional Nuclei validation for confirmed exploits
-- Optional Ollama LLM summarization
-- Live callback support (for TUI/real-time UI updates)
-- Automatic storage of results
-
-All tests in test_scanner.py now pass with realistic mocks.
+The main entrypoint `scan_targets` is async and accepts a ConfigSettings object or dict.
+It uses a single shared httpx.AsyncClient for efficiency. Version detection is delegated
+to fingerprinter.detect_php_version (with optional community rules). Post-processing
+includes VulnDB lookup, schema parsing, optional Nuclei and Ollama steps.
+The live callback is called after each target completes (used by TUI).
 """
 
 import asyncio
-from collections.abc import Callable
-from itertools import cycle
-from typing import Any, Dict, List, Optional, Union
+import random
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import httpx
 
 from .fingerprinter import (
-    detect_from_body,
+    CommunityFingerprinter,
+    detect_from_error_page,
     detect_from_headers,
+    detect_from_phpinfo,
     detect_php_version,
-    load_community_fingerprints,
 )
-from .models import (
-    ConfigSettings,
-    ExposedFile,
-    NucleiFinding,
-    ScanResult,
-    SchemaResult,
-    DEFAULT_USER_AGENTS,
-)
+from .models import ConfigSettings, DEFAULT_USER_AGENTS, ExposedFile, ScanResult
 from .nuclei import validate_with_nuclei
 from .ollama import generate_summary, is_ollama_available
 from .schema import locate_sql_urls, parse_sql_dump
-from .store import store_results
-from .vulndb import get_vulns_for_version, is_version_eol
+from .vulndb import get_vulns_for_version
 
 
 def _compute_risk_score(result: ScanResult) -> int:
-    """Compute risk score (0-100) based on PHP version age, vulns, exposed assets,
-    nuclei findings, schema sensitivity and EOL status.
+    """Internal risk scoring used by tests and scanner.
+
+    Factors: version age, # of vulns, nuclei confirmations, exposed files, schema sensitivity.
     """
     if not result.php_version:
         return 0
-    score = 0
-    major_minor = result.php_version.split(".")[:2]
-    major = int(major_minor[0])
-    if major <= 5:
-        score += 80
-    elif major == 7:
+
+    score = 20  # base for any legacy PHP
+
+    # Increase for older versions
+    if result.php_version.startswith(("5.", "7.0", "7.1", "7.2")):
         score += 50
-    elif major == 8 and (len(major_minor) > 1 and major_minor[1] == "0"):
+    elif result.php_version.startswith("7."):
         score += 30
-    else:
-        score += 10
-    score += len(result.vulns) * 12
-    score += len(result.exposed_files) * 20
-    score += len(result.nuclei_findings) * 25
-    if result.db_schema and result.db_schema.sensitive_columns:
-        score += 25
-    if is_version_eol(result.php_version):
+    elif result.php_version.startswith("8.0"):
         score += 15
+
+    score += len(result.vulns) * 10
+    score += len(result.nuclei_findings) * 20
+    score += len(result.exposed_files) * 15
+
+    if result.db_schema:
+        score += 10
+        score += len(result.db_schema.sensitive_columns) * 5
+
     return min(score, 100)
+
+
+async def _probe_target(
+    client: httpx.AsyncClient,
+    url: str,
+    config: ConfigSettings,
+    community_rules: Optional[List[Any]] = None,
+    callback: Optional[Callable[[ScanResult], None]] = None,
+) -> ScanResult:
+    """Probe one target. Returns populated ScanResult. Uses provided client."""
+    result = ScanResult(url=url)
+    ua = random.choice(config.user_agents)
+    headers = {"User-Agent": ua}
+    proxy = random.choice(config.proxies) if config.proxies else None
+
+    # Main request
+    try:
+        resp = await client.get(
+            url, headers=headers, proxy=proxy, timeout=config.timeout
+        )
+        version = detect_php_version(
+            dict(resp.headers),
+            resp.text,
+            community_rules=community_rules,
+        )
+        if version:
+            result.php_version = version
+            result.detected_from.append(
+                "headers" if detect_from_headers(dict(resp.headers)) else "body"
+            )
+    except httpx.HTTPStatusError as e:
+        # Try error page leak
+        version = detect_from_error_page(
+            e.response.text if hasattr(e, "response") and e.response else ""
+        )
+        if version:
+            result.php_version = version
+            result.detected_from.append("error_page")
+    except Exception:
+        pass
+
+    if not result.php_version:
+        # Probe common phpinfo locations
+        for suffix in ("/phpinfo.php", "/info.php", "/phpinfo"):
+            try:
+                purl = f"{url.rstrip('/')}{suffix}"
+                resp = await client.get(
+                    purl, headers=headers, proxy=proxy, timeout=config.timeout
+                )
+                version = detect_from_phpinfo(resp.text)
+                if not version:
+                    version = detect_php_version(
+                        body=resp.text, community_rules=community_rules
+                    )
+                if version:
+                    result.php_version = version
+                    result.detected_from.append("phpinfo")
+                    break
+            except Exception:
+                continue
+
+    if result.php_version:
+        result.vulns = get_vulns_for_version(result.php_version)
+        result.risk_score = _compute_risk_score(result)
+
+    # Exposed SQL files
+    try:
+        for sql_url in locate_sql_urls(url)[:2]:
+            try:
+                resp = await client.get(
+                    sql_url, headers=headers, proxy=proxy, timeout=config.timeout
+                )
+                if resp.status_code == 200 and any(
+                    kw in resp.text.lower() for kw in ("create table", "insert into", "dump")
+                ):
+                    result.exposed_files.append(
+                        ExposedFile(url=sql_url, snippet=resp.text[:300])
+                    )
+                    if result.db_schema is None:
+                        result.db_schema = parse_sql_dump(resp.text)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Nuclei
+    if config.use_nuclei:
+        try:
+            result.nuclei_findings = validate_with_nuclei([url])
+            if result.nuclei_findings:
+                result.risk_score = _compute_risk_score(result)
+        except Exception:
+            pass
+
+    # Ollama
+    if config.use_ollama:
+        try:
+            if is_ollama_available(timeout=2):
+                result.llm_summary = generate_summary([result], config.ollama_model)
+        except Exception:
+            result.llm_summary = "Summary generation failed (Ollama not available)."
+
+    if callback is not None:
+        callback(result)
+
+    return result
 
 
 async def scan_targets(
@@ -74,167 +167,61 @@ async def scan_targets(
     config: Optional[Union[ConfigSettings, Dict[str, Any]]] = None,
     callback: Optional[Callable[[ScanResult], None]] = None,
 ) -> List[ScanResult]:
-    """Scan list of targets concurrently and return ScanResult objects.
+    """Main async scanning function.
 
-    Accepts config as dict (validated to ConfigSettings) or ConfigSettings instance.
-    Supports UA rotation, proxies, community fingerprints, nuclei, ollama and live callbacks.
-    Results are automatically stored to SQLite.
+    - Accepts dict or ConfigSettings (validated).
+    - Rotates User-Agents and proxies per request.
+    - Uses semaphore for concurrency control.
+    - Calls live callback after each target for real-time UIs.
+    - Gracefully handles errors per target.
     """
-    if not targets:
-        return []
+    if isinstance(config, dict) or config is None:
+        config = ConfigSettings(**(config or {}))
+    if not config.user_agents:
+        config.user_agents = DEFAULT_USER_AGENTS[:]
 
-    if config is None:
-        config = ConfigSettings()
-    elif isinstance(config, dict):
-        config = ConfigSettings.model_validate(config)
-    elif not isinstance(config, ConfigSettings):
-        config = ConfigSettings.model_validate(config.model_dump())
-
-    community_rules = (
-        load_community_fingerprints(config.community_repo_url)
-        if config.use_community_fingerprints
-        else None
-    )
-
-    semaphore = asyncio.Semaphore(config.max_concurrency)
-    ua_cycle = cycle(config.user_agents)
-    proxy_cycle = cycle(config.proxies or [None])
+    community_rules = None
+    if config.use_community_fingerprints:
+        try:
+            community_rules = CommunityFingerprinter.load(config.community_repo_url)
+        except Exception:
+            pass  # fallback to built-in in detect_php_version
 
     results: List[ScanResult] = []
 
+    limits = httpx.Limits(
+        max_connections=config.max_concurrency,
+        max_keepalive_connections=config.max_concurrency,
+    )
+    timeout = httpx.Timeout(config.timeout, connect=5.0)
+
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(config.timeout),
-        limits=httpx.Limits(max_connections=config.max_concurrency, max_keepalive_connections=10),
+        limits=limits,
+        timeout=timeout,
         follow_redirects=True,
     ) as client:
+        semaphore = asyncio.Semaphore(config.max_concurrency)
 
-        async def _probe_target(url: str) -> ScanResult:
+        async def _scan_one(target: str):
             async with semaphore:
-                ua = next(ua_cycle)
-                proxy = next(proxy_cycle)
-                headers = {"User-Agent": ua}
                 try:
-                    response = await client.get(url, headers=headers, proxy=proxy)
-                    version = detect_php_version(
-                        headers=response.headers,
-                        body=response.text,
-                        community_rules=community_rules,
+                    r = await _probe_target(
+                        client, target, config, community_rules, callback
                     )
-                    detected_from: List[str] = []
-                    if version:
-                        if detect_from_headers(response.headers):
-                            detected_from.append("headers")
-                        elif detect_from_body(response.text):
-                            detected_from.append("body")
-                        else:
-                            detected_from.append("community")
-
-                    vulns = get_vulns_for_version(version) if version else []
-                    exposed_files: List[ExposedFile] = []
-                    db_schema: Optional[SchemaResult] = None
-                    sql_urls = locate_sql_urls(response.text)
-                    for s_url in sql_urls[:3]:
-                        try:
-                            s_resp = await client.get(
-                                s_url,
-                                headers=headers,
-                                proxy=proxy,
-                                timeout=httpx.Timeout(8.0),
-                            )
-                            if s_resp.is_success:
-                                content = s_resp.text
-                                parsed_schema = parse_sql_dump(content)
-                                exposed_files.append(
-                                    ExposedFile(
-                                        url=s_url,
-                                        content_type=s_resp.headers.get(
-                                            "content-type", "text/plain"
-                                        ),
-                                        size=len(content),
-                                        snippet=content[:400] if content else None,
-                                    )
-                                )
-                                if parsed_schema.tables:
-                                    db_schema = parsed_schema
-                        except Exception:  # noqa: BLE001
-                            continue
-
-                    nuclei_findings: List[NucleiFinding] = []
-                    if config.use_nuclei and version:
-                        try:
-                            nuclei_findings = validate_with_nuclei([url])
-                        except Exception:  # noqa: BLE001
-                            pass
-
-                    result = ScanResult(
-                        url=url,
-                        php_version=version,
-                        detected_from=detected_from,
-                        vulns=vulns,
-                        exposed_files=exposed_files,
-                        db_schema=db_schema,
-                        nuclei_findings=nuclei_findings,
-                        llm_summary=None,
-                        risk_score=0,
-                    )
-                    result.risk_score = _compute_risk_score(result)
-
+                    results.append(r)
+                except Exception:
+                    # graceful error handling as tested by test_scan_error_graceful
+                    err_result = ScanResult(url=target, php_version=None)
+                    results.append(err_result)
                     if callback:
-                        callback(result)
-                    return result
+                        callback(err_result)
 
-                except httpx.RequestError:
-                    result = ScanResult(
-                        url=url,
-                        php_version=None,
-                        detected_from=[],
-                        vulns=[],
-                        risk_score=20,
-                    )
-                    if callback:
-                        callback(result)
-                    return result
-                except Exception:  # noqa: BLE001
-                    result = ScanResult(
-                        url=url,
-                        php_version=None,
-                        detected_from=[],
-                        vulns=[],
-                        risk_score=0,
-                    )
-                    if callback:
-                        callback(result)
-                    return result
-
-        probe_tasks = [asyncio.create_task(_probe_target(t)) for t in targets]
-        for completed in asyncio.as_completed(probe_tasks):
-            res = await completed
-            results.append(res)
-
-    # Ollama summarization (one summary for the whole batch)
-    if (
-        config.use_ollama
-        and results
-        and any(r.php_version for r in results)
-        and is_ollama_available()
-    ):
-        try:
-            summary_text = generate_summary(
-                [r for r in results if r.php_version], model=config.ollama_model
-            )
-            for r in results:
-                r.llm_summary = summary_text
-        except Exception:  # noqa: BLE001
-            for r in results:
-                r.llm_summary = "LLM summarization unavailable at this time."
-
-    # Persist to SQLite (non-fatal if store fails)
-    try:
-        store_results(results)
-    except Exception:  # noqa: BLE001
-        pass
+        await asyncio.gather(*[_scan_one(t) for t in targets])
 
     return results
 
 
-__all__ = ["scan_targets"]
+__all__ = [
+    "scan_targets",
+    "_compute_risk_score",  # exported for test compatibility
+]
