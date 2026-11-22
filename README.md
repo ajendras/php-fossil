@@ -14,7 +14,7 @@
 
 **Discovers legacy PHP sites via search dorks, fingerprints old versions, maps vulns, extracts schemas and builds prioritized security lists.**
 
-[✨ Features](#-features) • [⚡ Quick start](#-quick-start) • [🧰 Usage](#-usage) • [🧩 Architecture](#-architecture) • [📍 Roadmap](#-roadmap) • [🤝 Contributing](#-contributing)
+[✨ Features](#-features) • [⚡ Quick start](#-quick-start) • [🧰 Usage](#-usage) • [🔧 Configuration](#-configuration) • [🔍 Troubleshooting](#-troubleshooting) • [🧩 Architecture](#-architecture) • [📍 Roadmap](#-roadmap) • [🤝 Contributing](#-contributing)
 
 </div>
 <!-- header:end -->
@@ -375,6 +375,74 @@ These are passed via the `config` dict to `scan_targets()` or via CLI flags `--c
 
 The scheduled GitHub Action uses a conservative concurrency of 5, always enables Nuclei, and skips Ollama (the fallback message is suppressed by not passing the flag). Edit the embedded `targets.txt` inside the workflow to list your own domains.
 
+## 🔍 Troubleshooting
+
+### Nuclei Integration
+
+Ensure the Nuclei binary is installed and available in your `$PATH`:
+
+```bash
+go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+export PATH="$PATH:$(go env GOPATH)/bin"
+nuclei -version
+```
+
+- Run `nuclei -update-templates` if template loading fails.
+- On Linux/macOS make the binary executable: `chmod +x $(which nuclei)`.
+- The scheduled GitHub Action automatically installs the latest Nuclei.
+- Use the `--nuclei` flag (or `use_nuclei=True`) only after verifying `nuclei -version` succeeds. The scanner catches subprocess errors and continues gracefully.
+- For detailed errors run scans with `-vv`; logs will show exact Nuclei command, stdout/stderr and any template or network problems.
+
+### Ollama Summaries
+
+Ollama must be running locally:
+
+1. Start the server in a separate terminal: `ollama serve` (or `OLLAMA_HOST=0.0.0.0 ollama serve` for broader access).
+2. Pull the model: `ollama pull llama3` (or whichever model you set in `ollama_model`).
+3. Verify the REST endpoint: `curl http://localhost:11434/api/tags`.
+
+Common issues and fixes:
+
+- **Connection refused / Connection error**: Ollama daemon is not running or listening on a different port. Start it and retry.
+- **Model not found**: Confirm the model name matches exactly (`llama3`, `mistral`, …) and that `ollama pull <model>` succeeded.
+- **Headless / CI environments**: Set `use_ollama=False` (the default). The `is_ollama_available()` helper returns `False` cleanly and `generate_summary()` falls back to a short textual summary.
+- Verbose mode (`-vv`) prints the exact JSON payload sent to Ollama and any response errors for easier debugging.
+
+### Proxy Setup & Rotation
+
+Proxies are supplied as a list in `ConfigSettings` (or the `config` dict passed to `scan_targets`):
+
+```python
+from phpfossil.models import ConfigSettings
+import asyncio
+from phpfossil import scan_targets
+
+config = ConfigSettings(
+    proxies=[
+        "http://127.0.0.1:8080",
+        "socks5://user:password@proxy.example.com:1080",
+        "http://brightdata-residential:port",  # residential proxies strongly recommended
+    ],
+    timeout=20,
+    use_nuclei=True,
+    verbose=2,
+)
+results = asyncio.run(scan_targets(["https://example.com"], config=config))
+```
+
+- **Supported schemes**: `http://`, `https://`, `socks4://`, `socks5://`.
+- **Authentication**: embed credentials in the URL (`http://user:pass@host:port`).
+- **Rotation**: when multiple proxies are given, a different one is used for every request (helps evade blocks and rate-limits). The rotation is round-robin and logged at DEBUG level.
+- **Residential / high-quality proxies**: services such as Bright Data, Oxylabs, IPRoyal or SOAX give far better success rates when scanning public search engines or legacy hosts.
+- **Testing a proxy**: `curl -x http://yourproxy:port https://httpbin.org/ip` or run a quick PHP Fossil scan against a known test endpoint.
+- **Common pitfalls**:
+  - Incorrect URL format → `httpx` raises `ProxyError`.
+  - Expired credentials or blocked IP → increase `timeout` or rotate to another proxy.
+  - Environment variables (`HTTP_PROXY`, `HTTPS_PROXY`) are respected only when the `proxies` list is empty.
+- Run with `-vv` to see which proxy was chosen for each request and any connection errors.
+
+For all three tools the rich logger (enabled by `-v` / `-vv`) prints clear, color-coded messages. When in doubt, increase verbosity and inspect the output before opening an issue.
+
 ## 🧩 Architecture
 
 ```mermaid
@@ -481,7 +549,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Extend embedded VulnDB with 30+ new PHP 8.0-8.3 CVEs plus EOL flags
 - [x] Add --verbose / -v flag to all CLI commands with rich logging levels
 - [x] Include mypy and ruff in CI workflow plus .github/dependabot.yml for dependency updates
-- [ ] Add troubleshooting guide section to README.md covering Nuclei, Ollama and proxy setup
+- [x] Add troubleshooting guide section to README.md covering Nuclei, Ollama and proxy setup
 
 > 🤖 This roadmap is worked through continuously — ideas and PRs welcome!
 <!-- roadmap:end -->
