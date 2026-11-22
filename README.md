@@ -435,10 +435,24 @@ tests/
 
 ## 🧪 Testing
 
-First install with test dependencies:
+The CI pipeline now includes **ruff** (linting), **mypy** (static type checking) and **pytest**. Dependabot is configured to keep all dependencies up-to-date.
+
+Install the development dependencies:
 
 ```bash
 pip install -e ".[dev]"
+```
+
+Run the checks locally:
+
+```bash
+# Lint
+ruff check .
+
+# Type check
+mypy src tests
+
+# Run tests
 pytest
 ```
 
@@ -466,7 +480,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Implement rotating User-Agent list in scanner.py with configurable pool
 - [x] Extend embedded VulnDB with 30+ new PHP 8.0-8.3 CVEs plus EOL flags
 - [x] Add --verbose / -v flag to all CLI commands with rich logging levels
-- [ ] Include mypy and ruff in CI workflow plus .github/dependabot.yml for dependency updates
+- [x] Include mypy and ruff in CI workflow plus .github/dependabot.yml for dependency updates
 - [ ] Add troubleshooting guide section to README.md covering Nuclei, Ollama and proxy setup
 
 > 🤖 This roadmap is worked through continuously — ideas and PRs welcome!
