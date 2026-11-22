@@ -48,7 +48,7 @@ jobs:
         # Note: Ollama is disabled in CI as it requires a running service
 
       - name: Upload results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phpfossil-results
           path: |
