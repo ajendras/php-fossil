@@ -1,69 +1,53 @@
-"""Tests for passive discovery module."""
+"""Tests for passive discovery with Shodan and Censys."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from phpfossil import (
     CensysSearcher,
-    PassiveResult,
     ShodanSearcher,
     passive_discover,
-    search_censys,
-    search_shodan,
 )
 
 
-@patch("phpfossil.passive.requests.get")
-def test_search_shodan(mock_get):
-    """Test Shodan search returns parsed URLs."""
+@patch("phpfossil.passive.httpx.get")
+def test_shodan_searcher(mock_get: MagicMock) -> None:
+    """Test ShodanSearcher parses host results into URLs."""
     mock_get.return_value.json.return_value = {
         "matches": [
-            {"ip_str": "192.0.2.1", "port": 80, "ssl": False},
-            {"ip_str": "192.0.2.2", "port": 443, "ssl": True},
+            {"ip_str": "192.0.2.1", "port": 80, "http": {"host": "example.com"}}
         ]
     }
-    results = search_shodan('php "Version 7.4"', limit=10, api_key="testkey")
-    assert len(results) == 2
-    assert any("http://" in r for r in results)
+    searcher = ShodanSearcher(api_key="fake-key")
+    results = searcher.search('php "Version 7.4"', limit=5)
+    assert len(results) == 1
+    assert "http://example.com" in results[0]
 
 
-@patch("phpfossil.passive.requests.get")
-def test_search_censys(mock_get):
-    """Test Censys search functionality."""
+@patch("phpfossil.passive.httpx.get")
+def test_censys_searcher(mock_get: MagicMock) -> None:
+    """Test CensysSearcher parses results into target URLs."""
     mock_get.return_value.json.return_value = {
         "results": [
-            {"services": [{"port": 80}], "ip": "192.0.2.3"},
+            {
+                "services": [{"port": 80}],
+                "location": {"registered_country": "US"},
+                "dns": {"names": ["test.com"]},
+            }
         ]
     }
-    results = search_censys('php "Version"', limit=5, api_id="id", api_secret="secret")
+    searcher = CensysSearcher(api_id="fake", api_secret="fake")
+    results = searcher.search("php", limit=3)
     assert len(results) >= 1
 
 
-def test_passive_discover():
-    """Test combined passive discovery."""
-    with patch("phpfossil.passive.search_shodan") as mock_shodan, patch(
-        "phpfossil.passive.search_censys"
-    ) as mock_censys:
-        mock_shodan.return_value = ["http://test1.com"]
-        mock_censys.return_value = ["https://test2.com"]
-        targets = passive_discover(
-            query='php "Version 8"',
-            shodan_key="key",
-            censys_id="id",
-            censys_secret="secret",
-            limit=20,
-        )
-        assert len(targets) == 2
-        assert "http://test1.com" in targets
-
-
-def test_shodan_searcher_class():
-    """Test the ShodanSearcher class."""
-    searcher = ShodanSearcher(api_key="fake")
-    assert searcher.api_key == "fake"
-
-
-def test_censys_searcher_class():
-    """Test the CensysSearcher class."""
-    searcher = CensysSearcher(api_id="id", api_secret="secret")
-    assert searcher.api_id == "id"
-    assert searcher.api_secret == "secret"
+@patch("phpfossil.passive.ShodanSearcher")
+def test_passive_discover(mock_shodan: MagicMock) -> None:
+    """Test passive_discover aggregates results from enabled providers."""
+    mock_shodan.return_value.search.return_value = [
+        "http://legacy.example.com"
+    ]
+    targets = passive_discover(
+        query='php "Version"', shodan_key="fake", limit=10
+    )
+    assert "http://legacy.example.com" in targets
+    mock_shodan.assert_called_once()
