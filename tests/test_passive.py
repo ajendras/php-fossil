@@ -1,53 +1,79 @@
-"""Tests for passive discovery with Shodan and Censys."""
+"""Tests for passive discovery (Shodan/Censys). Uses pytest-httpx mocks."""
 
-from unittest.mock import MagicMock, patch
+import pytest
 
-from phpfossil import (
-    CensysSearcher,
-    ShodanSearcher,
+from phpfossil.passive import (
+    search_shodan,
+    search_censys,
     passive_discover,
+    ShodanSearcher,
+    CensysSearcher,
 )
 
 
-@patch("phpfossil.passive.httpx.get")
-def test_shodan_searcher(mock_get: MagicMock) -> None:
-    """Test ShodanSearcher parses host results into URLs."""
-    mock_get.return_value.json.return_value = {
-        "matches": [
-            {"ip_str": "192.0.2.1", "port": 80, "http": {"host": "example.com"}}
-        ]
-    }
-    searcher = ShodanSearcher(api_key="fake-key")
-    results = searcher.search('php "Version 7.4"', limit=5)
+def test_shodan_searcher(httpx_mock):
+    """Mock Shodan API response; expect at least one URL."""
+    httpx_mock.add_response(
+        url="https://api.shodan.io/shodan/host/search",
+        json={
+            "matches": [
+                {
+                    "ip_str": "192.0.2.1",
+                    "port": 80,
+                    "hostnames": ["example.com"],
+                }
+            ]
+        },
+    )
+    results = search_shodan('php "Version 7.4"', "fake-shodan-key", 1)
     assert len(results) == 1
-    assert "http://example.com" in results[0]
+    assert "example.com" in results[0]
 
 
-@patch("phpfossil.passive.httpx.get")
-def test_censys_searcher(mock_get: MagicMock) -> None:
-    """Test CensysSearcher parses results into target URLs."""
-    mock_get.return_value.json.return_value = {
-        "results": [
-            {
-                "services": [{"port": 80}],
-                "location": {"registered_country": "US"},
-                "dns": {"names": ["test.com"]},
+def test_censys_searcher(httpx_mock):
+    """Mock Censys API response."""
+    httpx_mock.add_response(
+        url="https://search.censys.io/api/v2/hosts/search",
+        json={
+            "result": {
+                "hits": [
+                    {
+                        "ip": "192.0.2.2",
+                        "services": [{"port": 80, "service_name": "HTTP"}],
+                    }
+                ]
             }
-        ]
-    }
-    searcher = CensysSearcher(api_id="fake", api_secret="fake")
-    results = searcher.search("php", limit=3)
+        },
+    )
+    results = search_censys('php "Version"', "fake-id", "fake-secret", 1)
     assert len(results) >= 1
 
 
-@patch("phpfossil.passive.ShodanSearcher")
-def test_passive_discover(mock_shodan: MagicMock) -> None:
-    """Test passive_discover aggregates results from enabled providers."""
-    mock_shodan.return_value.search.return_value = [
-        "http://legacy.example.com"
-    ]
-    targets = passive_discover(
-        query='php "Version"', shodan_key="fake", limit=10
+def test_passive_discover(httpx_mock):
+    """End-to-end passive discovery returns list of str URLs (no .url attribute error)."""
+    httpx_mock.add_response(
+        url=re.compile(r"https://api\.shodan\.io.*"),
+        json={"matches": [{"ip_str": "192.0.2.1", "port": 80, "hostnames": ["test.com"]}]},
     )
-    assert "http://legacy.example.com" in targets
-    mock_shodan.assert_called_once()
+    httpx_mock.add_response(
+        url=re.compile(r"https://search\.censys\.io.*"),
+        json={"result": {"hits": []}},
+    )
+    targets = passive_discover(
+        query='php "Version 7.4"',
+        shodan_key="fake-key",
+        limit=5,
+    )
+    assert len(targets) >= 1
+    assert any("test.com" in t for t in targets)
+
+
+def test_searcher_classes():
+    """Test the wrapper classes that return PassiveResult objects."""
+    shodan = ShodanSearcher("fake-key")
+    censys = CensysSearcher("fake-id", "fake-secret")
+    with patch("phpfossil.passive.search_shodan", return_value=["https://example.com"]):
+        results = shodan.search("php", 1)
+        assert len(results) == 1
+        assert results[0].url == "https://example.com"
+        assert results[0].source == "shodan"

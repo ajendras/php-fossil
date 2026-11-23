@@ -1,41 +1,62 @@
-"""Tests for nuclei integration."""
+"""Tests for Nuclei integration and models."""
 
-from unittest.mock import MagicMock, patch
+import json
+from unittest.mock import patch, MagicMock
 
-from phpfossil import NucleiFinding, NucleiValidator, validate_with_nuclei
+import pytest
 
-
-@patch("phpfossil.nuclei.subprocess.run")
-def test_validate_with_nuclei(mock_run: MagicMock) -> None:
-    """Test that validate_with_nuclei correctly parses Nuclei JSON output."""
-    mock_run.return_value.returncode = 0
-    mock_run.return_value.stdout = (
-        b'[{"template-id":"php-cve","info":{"severity":"critical","name":"PHP RCE"}}]'
-    )
-    findings = validate_with_nuclei("https://example.com")
-    assert len(findings) == 1
-    assert findings[0].severity == "critical"
-    assert findings[0].name == "php-cve"
+from phpfossil.models import NucleiFinding
+from phpfossil.nuclei import validate_with_nuclei
 
 
-def test_nuclei_finding_model() -> None:
-    """Test NucleiFinding pydantic model validation and attributes."""
-    finding = NucleiFinding(
-        name="test-template",
-        severity="high",
-        description="Test description",
-        reference="https://example.com",
-    )
-    assert finding.name == "test-template"
+def test_nuclei_finding_model():
+    """Test Pydantic validation with all required fields (template is mandatory)."""
+    data = {
+        "template": "test-template",
+        "info": {
+            "name": "Test Template",
+            "severity": "high",
+            "description": "Test description for validation",
+        },
+        "host": "https://example.com",
+        "matched-at": "https://example.com/index.php",
+    }
+    finding = NucleiFinding.model_validate(data)
+    assert finding.template == "test-template"
     assert finding.severity == "high"
-    assert finding.description == "Test description"
+    assert finding.name == "Test Template"
 
 
-@patch("phpfossil.nuclei.NucleiValidator")
-def test_nuclei_validator(mock_validator_class: MagicMock) -> None:
-    """Test NucleiValidator class instantiation and interface."""
-    mock_validator = MagicMock()
-    mock_validator_class.return_value = mock_validator
+def test_validate_with_nuclei():
+    """Mock subprocess so test passes in CI without nuclei binary installed."""
+    mock_output = json.dumps(
+        [
+            {
+                "template": "php/legacy-version",
+                "info": {
+                    "name": "PHP Legacy Version",
+                    "severity": "high",
+                    "description": "Outdated PHP detected",
+                },
+                "host": "http://example.com",
+                "matched-at": "http://example.com",
+            }
+        ]
+    )
+    mock_result = MagicMock()
+    mock_result.stdout = mock_output
+    mock_result.returncode = 0
+
+    with patch("subprocess.run", return_value=mock_result) as mock_run:
+        findings = validate_with_nuclei("http://example.com", templates_dir=None)
+        assert len(findings) == 1
+        assert findings[0].template == "php/legacy-version"
+        mock_run.assert_called_once()
+
+
+def test_nuclei_validator_class():
+    """Basic test for the validator class."""
     validator = NucleiValidator()
-    assert validator is not None
-    mock_validator.validate.assert_not_called()
+    with patch("phpfossil.nuclei.validate_with_nuclei", return_value=[]):
+        findings = validator.validate("https://example.com")
+        assert findings == []
