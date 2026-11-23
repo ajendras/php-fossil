@@ -1,7 +1,9 @@
-"""PHP version fingerprinting utilities.
+"""PHP version and CMS fingerprinting utilities.
 
 Pure functions that detect PHP versions from HTTP headers, response bodies,
-phpinfo() output and error pages. Used by the AsyncScanner.
+phpinfo() output and error pages. Also provides dedicated helpers for
+eight popular PHP CMS/frameworks (WordPress, Joomla, Drupal, Magento,
+PrestaShop, Laravel, Symfony, CodeIgniter). Used by the AsyncScanner.
 
 Now robustly accepts bytes (response.content) or str (response.text) for
 body/content parameters.
@@ -428,11 +430,81 @@ def detect_laravel_version(body: str) -> Optional[str]:
     return None
 
 
+def detect_symfony_version(body: str) -> Optional[str]:
+    """Detect Symfony version from HTML body.
+
+    Looks for generator meta tag or Symfony version strings in comments/debug output.
+
+    Args:
+        body: HTML content of a page.
+
+    Returns:
+        Symfony version string or None.
+    """
+    if not body or not isinstance(body, str):
+        return None
+
+    # Meta generator tag
+    meta_match = re.search(
+        r'<meta\s+name=["\']generator["\']\s+content=["\']Symfony.*?([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        body,
+        re.IGNORECASE,
+    )
+    if meta_match and meta_match.group(1):
+        return meta_match.group(1)
+
+    # Common patterns in Symfony apps: Symfony 6.4.3, v6.4.3, Symfony/v6.4.3
+    inline_match = re.search(
+        r'(?:Symfony|symfony)[/\s]*(?:v|V|version)?[:=\s]*([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        body,
+        re.IGNORECASE,
+    )
+    if inline_match:
+        return inline_match.group(1)
+
+    return None
+
+
+def detect_codeigniter_version(body: str) -> Optional[str]:
+    """Detect CodeIgniter version from HTML body.
+
+    Searches for version strings in comments, footers or generator meta.
+
+    Args:
+        body: HTML content.
+
+    Returns:
+        CodeIgniter version string or None.
+    """
+    if not body or not isinstance(body, str):
+        return None
+
+    # Common footer or comment: CodeIgniter 4.5.2
+    ci_match = re.search(
+        r'CodeIgniter(?:\s+Framework)?\s*(?:v|V|version)?[:=\s/]*([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        body,
+        re.IGNORECASE,
+    )
+    if ci_match:
+        return ci_match.group(1)
+
+    # Meta generator
+    meta_match = re.search(
+        r'<meta\s+name=["\']generator["\']\s+content=["\']CodeIgniter.*?([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
+        body,
+        re.IGNORECASE,
+    )
+    if meta_match and meta_match.group(1):
+        return meta_match.group(1)
+
+    return None
+
+
 def detect_cms_version(body: str) -> Optional[Tuple[str, str]]:
     """Detect CMS name and version from HTML body.
 
-    Checks WordPress, Joomla, Drupal, Magento, PrestaShop then Laravel
-    in that order of precedence.
+    Checks WordPress, Joomla, Drupal, Magento, PrestaShop, Laravel,
+    Symfony then CodeIgniter in that order of precedence.
 
     Returns:
         Tuple of (cms_name, version) e.g. ("drupal", "10.2.3") or None.
@@ -460,6 +532,14 @@ def detect_cms_version(body: str) -> Optional[Tuple[str, str]]:
     laravel = detect_laravel_version(body)
     if laravel:
         return ("laravel", laravel)
+
+    symfony = detect_symfony_version(body)
+    if symfony:
+        return ("symfony", symfony)
+
+    codeigniter = detect_codeigniter_version(body)
+    if codeigniter:
+        return ("codeigniter", codeigniter)
 
     return None
 
@@ -640,6 +720,8 @@ __all__ = [
     "detect_magento_version",
     "detect_prestashop_version",
     "detect_laravel_version",
+    "detect_symfony_version",
+    "detect_codeigniter_version",
     "detect_cms_version",
     # Community fingerprint repository
     "load_community_fingerprints",

@@ -304,24 +304,12 @@ generate_report(results, output_format="csv", output_path="bounty.csv")
 <details><summary>Extending the fingerprinter</summary>
 
 ```python
-from phpfossil.fingerprinter import detect_php_version
-
-# Combine multiple sources
-version = detect_php_version(
-    headers={"X-Powered-By": "PHP/7.4.33"},
-    body="<h1>PHP Version 7.4.33</h1>",
-    phpinfo_content="PHP Version 7.4.33"
-)
-print(version)  # 7.4.33
-```
-
-**CMS fingerprinting (new):**
-
-```python
 from phpfossil.fingerprinter import (
     detect_drupal_version,
     detect_magento_version,
     detect_prestashop_version,
+    detect_symfony_version,
+    detect_codeigniter_version,
     detect_cms_version,
 )
 
@@ -332,6 +320,13 @@ print(detect_cms_version(body))     # ('drupal', '10.2.3')
 
 magento_body = 'Magento 2.4.6'
 print(detect_magento_version(magento_body))  # 2.4.6
+
+symfony_body = '<meta name="generator" content="Symfony 6.4.3">'
+print(detect_symfony_version(symfony_body))  # 6.4.3
+print(detect_cms_version(symfony_body))      # ('symfony', '6.4.3')
+
+ci_body = 'CodeIgniter 4.5.2'
+print(detect_codeigniter_version(ci_body))   # 4.5.2
 ```
 
 </details>
@@ -550,6 +545,14 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Add --verbose / -v flag to all CLI commands with rich logging levels
 - [x] Include mypy and ruff in CI workflow plus .github/dependabot.yml for dependency updates
 - [x] Add troubleshooting guide section to README.md covering Nuclei, Ollama and proxy setup
+- [x] Add Symfony/CodeIgniter fingerprint functions to fingerprinter.py and extend detect_cms_version
+- [ ] Implement per-domain rate limiting using asyncio.Semaphore in scanner.py
+- [ ] Add test_cli.py with typer.CliRunner covering all commands and config parsing
+- [ ] Support custom Nuclei template directory via ConfigSettings and --nuclei-templates CLI flag
+- [ ] Add --risk-threshold filter to scan/report CLI commands and update models.py validator
+- [ ] Extend embedded VulnDB with 25 Laravel/Symfony CVEs plus framework-specific severity rules
+- [ ] Add response caching layer (TTL dict) in scanner.py for repeated target scans
+- [ ] Update HTML reporter with Chart.js vulnerability distribution pie and severity filter chips
 
 > 🤖 This roadmap is worked through continuously — ideas and PRs welcome!
 <!-- roadmap:end -->

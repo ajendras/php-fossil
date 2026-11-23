@@ -62,6 +62,8 @@ from .fingerprinter import (
     detect_drupal_version,
     detect_magento_version,
     detect_prestashop_version,
+    detect_symfony_version,
+    detect_codeigniter_version,
     detect_cms_version,
     load_community_fingerprints,
     detect_with_community_rules,
@@ -109,6 +111,8 @@ __all__ = [
     "detect_drupal_version",
     "detect_magento_version",
     "detect_prestashop_version",
+    "detect_symfony_version",
+    "detect_codeigniter_version",
     "detect_cms_version",
     # Community fingerprint repository
     "load_community_fingerprints",
