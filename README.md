@@ -546,7 +546,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Include mypy and ruff in CI workflow plus .github/dependabot.yml for dependency updates
 - [x] Add troubleshooting guide section to README.md covering Nuclei, Ollama and proxy setup
 - [x] Add Symfony/CodeIgniter fingerprint functions to fingerprinter.py and extend detect_cms_version
-- [ ] Implement per-domain rate limiting using asyncio.Semaphore in scanner.py
+- [x] Implement per-domain rate limiting using asyncio.Semaphore in scanner.py
 - [ ] Add test_cli.py with typer.CliRunner covering all commands and config parsing
 - [ ] Support custom Nuclei template directory via ConfigSettings and --nuclei-templates CLI flag
 - [ ] Add --risk-threshold filter to scan/report CLI commands and update models.py validator

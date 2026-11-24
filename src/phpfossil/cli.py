@@ -174,6 +174,7 @@ def cmd_passive(
         try:
             config = ConfigSettings(
                 max_concurrency=min(15, len(discovered)),
+                per_domain_limit=3,
                 timeout=12,
                 use_nuclei=True,
                 use_ollama=False,
@@ -203,6 +204,7 @@ def scan(
         typer.Option("-f", "--file", exists=True, dir_okay=False, help="File with one URL per line"),
     ] = None,
     concurrency: Annotated[int, typer.Option("--concurrency", "-c", min=5, max=100)] = 20,
+    per_domain_limit: Annotated[int, typer.Option("--per-domain-limit", "-d", min=1, max=20)] = 5,
     timeout: Annotated[int, typer.Option("--timeout", min=1, max=60)] = 12,
     nuclei: Annotated[bool, typer.Option("--nuclei", help="Enable Nuclei for deeper exploit validation")] = False,
     ollama: Annotated[bool, typer.Option("--ollama", help="Enable Local LLM (Ollama) summaries of discovered issues")] = False,
@@ -232,6 +234,7 @@ def scan(
     try:
         config = ConfigSettings(
             max_concurrency=concurrency,
+            per_domain_limit=per_domain_limit,
             timeout=timeout,
             use_nuclei=nuclei,
             use_ollama=ollama,
@@ -244,17 +247,19 @@ def scan(
         raise typer.Exit(1) from exc
 
     logger.info(
-        "Scanning %d target(s) (concurrency=%s, nuclei=%s, ollama=%s, community=%s)",
+        "Scanning %d target(s) (concurrency=%s, per-domain=%s, nuclei=%s, ollama=%s, community=%s)",
         len(targets),
         config.max_concurrency,
+        config.per_domain_limit,
         config.use_nuclei,
         config.use_ollama,
         config.use_community_fingerprints,
     )
     console.print(
         f"[bold blue]Scanning {len(targets)} target(s) "
-        f"(concurrency={config.max_concurrency}, nuclei={config.use_nuclei}, "
-        f"ollama={config.use_ollama}, community={config.use_community_fingerprints})...[/]"
+        f"(concurrency={config.max_concurrency}, per-domain={config.per_domain_limit}, "
+        f"nuclei={config.use_nuclei}, ollama={config.use_ollama}, "
+        f"community={config.use_community_fingerprints})...[/]"
     )
     # Run the async scanner (now accepts ConfigSettings directly)
     results = asyncio.run(scan_targets(targets, config=config))

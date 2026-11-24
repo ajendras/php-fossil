@@ -142,6 +142,7 @@ class ConfigSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     max_concurrency: int = Field(default=20, ge=1, le=50)
+    per_domain_limit: int = Field(default=5, ge=1, le=20)
     timeout: int = Field(default=12, ge=1, le=60)
     proxies: List[str] = Field(default_factory=list)
     user_agents: List[str] = Field(default_factory=list)
