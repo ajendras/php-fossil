@@ -11,6 +11,8 @@ import logging
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.markup import escape
+from rich.table import Table
 
 from phpfossil import (
     __version__,
@@ -110,15 +112,15 @@ def cmd_dorks(
             f"\n[bold green]Generated {len(dorks)} search dorks for PHP {version}:[/]\n"
         )
         for i, dork in enumerate(dorks, 1):
-            console.print(f"  {i:2d}. [cyan]{dork}[/]")
+            console.print(f"  {i:2d}. [cyan]{escape(dork)}[/]")
 
         if save:
             save.write_text("\n".join(dorks), encoding="utf-8")
-            console.print(f"\n[green]Saved dorks to [bold]{save}[/][/]")
+            console.print(f"\n[green]Saved dorks to [bold]{escape(str(save))}[/][/]")
         logger.debug("Dork generation completed successfully")
     except ValueError as exc:
         logger.error("Failed to generate dorks: %s", exc)
-        console.print(f"[red]Error:[/] {exc}")
+        console.print(f"[red]Error:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
 
@@ -138,7 +140,7 @@ def cmd_passive(
     _setup_logging(verbose)
     logger = logging.getLogger("phpfossil.cli")
     logger.info("Starting passive discovery with query: %s", query)
-    console.print(f"[bold blue]Starting passive discovery for query: {query}[/]")
+    console.print(f"[bold blue]Starting passive discovery for query: {escape(query)}[/]")
 
     shodan_key = os.getenv("SHODAN_API_KEY")
     censys_id = os.getenv("CENSYS_API_ID")
@@ -163,7 +165,7 @@ def cmd_passive(
 
     console.print(f"[green]Discovered {len(discovered)} unique target(s):[/]")
     for url in discovered[:10]:
-        console.print(f"  • [cyan]{url}[/]")
+        console.print(f"  • [cyan]{escape(url)}[/]")
     if len(discovered) > 10:
         console.print(f"  ... and {len(discovered)-10} more.")
 
@@ -183,7 +185,7 @@ def cmd_passive(
             )
         except Exception as exc:  # pydantic.ValidationError caught here
             logger.error("Config validation failed: %s", exc)
-            console.print(f"[red]Config validation error:[/] {exc}")
+            console.print(f"[red]Config validation error:[/] {escape(str(exc))}")
             raise typer.Exit(1) from exc
         results = asyncio.run(scan_targets(discovered, config=config))
         store_results(results)
@@ -238,7 +240,7 @@ def scan(
         )
     except Exception as exc:  # pydantic.ValidationError caught here
         logger.error("Config validation failed: %s", exc)
-        console.print(f"[red]Config validation error:[/] {exc}")
+        console.print(f"[red]Config validation error:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
     logger.info(
@@ -260,7 +262,7 @@ def scan(
     # Persist raw results
     json_data = [r.model_dump(mode="json") for r in results]
     output.write_text(json.dumps(json_data, indent=2, default=str), encoding="utf-8")
-    console.print(f"[green]JSON results saved to {output}[/]")
+    console.print(f"[green]JSON results saved to {escape(str(output))}[/]")
 
     # Persist to SQLite history store (automatic)
     store_results(results)
@@ -296,7 +298,7 @@ def report(
     logger.info("Generating report from %s", input_file)
     if not input_file.exists():
         logger.error("Input file does not exist: %s", input_file)
-        console.print(f"[red]File {input_file} does not exist.[/]")
+        console.print(f"[red]File {escape(str(input_file))} does not exist.[/]")
         raise typer.Exit(1)
 
     data = json.loads(input_file.read_text(encoding="utf-8"))
@@ -343,7 +345,7 @@ def cmd_history(
         logger.debug("History retrieval completed")
     except Exception as exc:  # noqa: BLE001
         logger.error("History command failed: %s", exc)
-        console.print(f"[red]Error accessing history: {exc}[/]")
+        console.print(f"[red]Error accessing history: {escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
 
@@ -408,7 +410,7 @@ def cmd_list(
             }
         )
         list_file.write_text(json.dumps(tracked, indent=2, default=str), encoding="utf-8")
-        console.print(f"[green]Added [bold]{url}[/] to the at-risk list.[/]")
+        console.print(f"[green]Added [bold]{escape(url)}[/] to the at-risk list.[/]")
 
     elif action == "clear":
         if typer.confirm("Clear the entire at-risk list?"):
