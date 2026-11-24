@@ -5,7 +5,7 @@ Uses subprocess to invoke the nuclei CLI tool and parses JSON output into Pydant
 
 import json
 import subprocess
-from typing import List, Optional
+from typing import List, Optional, Any
 
 from .models import NucleiFinding
 
@@ -13,13 +13,17 @@ from .models import NucleiFinding
 def validate_with_nuclei(
     targets: List[str],
     templates: Optional[List[str]] = None,
+    templates_dir: Optional[str] = None,
     timeout: int = 45,
 ) -> List[NucleiFinding]:
     """Execute Nuclei against one or more targets.
 
     Returns list of NucleiFinding objects. If the nuclei binary is not found
     or any error occurs, returns empty list (graceful degradation).
+    Supports templates_dir for backwards compatibility with tests.
     """
+    if templates_dir and not templates:
+        templates = [templates_dir]
     if not templates:
         templates = ["cves/php", "vulnerabilities/php", "http/technologies/php"]
 
@@ -33,7 +37,6 @@ def validate_with_nuclei(
             "-silent",
             "-timeout", "10",
         ]
-        # Add templates
         if templates:
             cmd.extend(["-t"] + templates)
 
@@ -51,7 +54,7 @@ def validate_with_nuclei(
                     line = line.strip()
                     if line:
                         try:
-                            raw = json.loads(line)
+                            raw: dict[str, Any] = json.loads(line)
                             finding = NucleiFinding.model_validate(raw)
                             findings.append(finding)
                         except (json.JSONDecodeError, ValueError):
@@ -68,11 +71,17 @@ def validate_with_nuclei(
 class NucleiValidator:
     """Encapsulates Nuclei usage, mirroring OllamaSummarizer style."""
 
-    def __init__(self, templates: Optional[List[str]] = None):
+    def __init__(self, templates: Optional[List[str]] = None, templates_dir: Optional[str] = None):
         self.templates = templates or []
+        self.templates_dir = templates_dir
 
     def validate(self, targets: List[str], timeout: int = 45) -> List[NucleiFinding]:
-        return validate_with_nuclei(targets, self.templates, timeout)
+        templates = self.templates
+        if self.templates_dir:
+            templates = templates + [self.templates_dir] if templates else [self.templates_dir]
+        return validate_with_nuclei(
+            targets, templates=templates, templates_dir=self.templates_dir, timeout=timeout
+        )
 
     @staticmethod
     def is_available() -> bool:
