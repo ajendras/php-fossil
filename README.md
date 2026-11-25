@@ -472,7 +472,7 @@ PHP Fossil follows a clean, modular architecture. The public API in `__init__.py
 src/phpfossil/
 ├── __init__.py          # Public API, models, scan_targets, generate_dorks, generate_report
 ├── cli.py               # Typer commands: scan, dorks, report, list, history, tui
-├── models.py            # Pydantic models (ScanResult, Vulnerability, SchemaResult, ExposedFile)
+├── models.py            # Pydantic models (ScanResult, Vulnerability, SchemaResult)
 ├── scanner.py           # Async scanning, _probe_target, rate limiting, proxy rotation, Nuclei/Ollama post-processing + live callback
 ├── fingerprinter.py     # detect_from_headers, detect_from_body, detect_from_phpinfo, detect_from_error_page
 ├── vulndb.py            # _get_embedded_vulndb, get_vulns_for_version
@@ -491,9 +491,13 @@ examples/
 └── custom_dorks.py      # Extending DorkGenerator
 
 tests/
+├── test_cli.py          # CLI commands with typer.CliRunner + ConfigSettings parsing
 ├── test_scanner.py      # Tests for fingerprinting, async mocks, exposed files, Store, Nuclei, Ollama, live callback
 ├── test_vulndb.py       # CVE mapping, severity, EOL checks
 ├── test_fingerprinter_cms.py  # New tests for CMS version detection
+├── test_passive.py
+├── test_nuclei.py
+└── test_ollama.py
 ```
 
 ## 🧪 Testing
@@ -519,7 +523,7 @@ mypy src tests
 pytest
 ```
 
-Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mocks, `parse_sql_dump`, VulnDB lookup, CLI commands, JSON serialization of `ScanResult` objects, the new persistent `Store`, mocked Nuclei validation and the Ollama summarizer (with mocked HTTP calls to localhost:11434). Dedicated test files (`test_passive.py`, `test_nuclei.py`, `test_ollama.py`) now provide complete isolated coverage for `passive.py` (Shodan/Censys API responses), `nuclei.py` (subprocess mocking) and `ollama.py` (Ollama REST API). The TUI live callback path is exercised in `test_scanner.py`.
+Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mocks, `parse_sql_dump`, VulnDB lookup, all CLI commands via `test_cli.py` (using `typer.CliRunner`, mocking and ConfigSettings validation), JSON serialization of `ScanResult` objects, the persistent `Store`, mocked Nuclei, Ollama and passive discovery. Dedicated test files (`test_cli.py`, `test_passive.py`, `test_nuclei.py`, `test_ollama.py`, `test_fingerprinter_cms.py`) provide complete coverage. The TUI live callback path is exercised in `test_scanner.py`.
 
 ## 📍 Roadmap
 
@@ -547,7 +551,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Add troubleshooting guide section to README.md covering Nuclei, Ollama and proxy setup
 - [x] Add Symfony/CodeIgniter fingerprint functions to fingerprinter.py and extend detect_cms_version
 - [x] Implement per-domain rate limiting using asyncio.Semaphore in scanner.py
-- [ ] Add test_cli.py with typer.CliRunner covering all commands and config parsing
+- [x] Add test_cli.py with typer.CliRunner covering all commands and config parsing
 - [ ] Support custom Nuclei template directory via ConfigSettings and --nuclei-templates CLI flag
 - [ ] Add --risk-threshold filter to scan/report CLI commands and update models.py validator
 - [ ] Extend embedded VulnDB with 25 Laravel/Symfony CVEs plus framework-specific severity rules
