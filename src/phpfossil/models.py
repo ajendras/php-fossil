@@ -190,6 +190,8 @@ class ConfigSettings(BaseModel):
     respected by scanner/tui components). 0=WARNING, 1=INFO, 2=DEBUG.
     Timeout is validated >= 1 and <= 60 seconds (test compatibility + realistic
     minimum for network operations).
+    New: nuclei_templates_dir allows specifying a custom directory for Nuclei
+    templates (passed via the -t flag to the nuclei binary).
     """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
@@ -200,6 +202,9 @@ class ConfigSettings(BaseModel):
     proxies: List[str] = Field(default_factory=list)
     user_agents: List[str] = Field(default_factory=list)
     use_nuclei: bool = False
+    nuclei_templates_dir: Optional[Path] = Field(
+        default=None, description="Custom directory containing Nuclei templates (passed with -t)"
+    )
     use_ollama: bool = False
     ollama_model: str = "llama3"
     use_community_fingerprints: bool = False

@@ -23,7 +23,9 @@ Community fingerprint repository:
     load_community_fingerprints(), CommunityFingerprinter, FingerprintRule
 
 New: per_domain_limit (default 5) uses asyncio.Semaphore for per-host rate limiting
-in addition to global max_concurrency.
+in addition to global max_concurrency. New: nuclei_templates_dir (None by default)
+supports custom Nuclei template directories via ConfigSettings and the
+--nuclei-templates CLI flag (passed to nuclei -t).
 
 detect_php_version and related functions now accept bytes (e.g. response.content)
 or str (response.text) for body/phpinfo_content arguments.

@@ -207,6 +207,10 @@ def scan(
     per_domain_limit: Annotated[int, typer.Option("--per-domain-limit", "-d", min=1, max=20)] = 5,
     timeout: Annotated[int, typer.Option("--timeout", min=1, max=60)] = 12,
     nuclei: Annotated[bool, typer.Option("--nuclei", help="Enable Nuclei for deeper exploit validation")] = False,
+    nuclei_templates: Annotated[
+        Optional[Path],
+        typer.Option("--nuclei-templates", help="Custom Nuclei templates directory (passed with -t)"),
+    ] = None,
     ollama: Annotated[bool, typer.Option("--ollama", help="Enable Local LLM (Ollama) summaries of discovered issues")] = False,
     community: Annotated[bool, typer.Option("--community", help="Enable community fingerprint repository loader")] = False,
     output: Annotated[Path, typer.Option("--output", "-o")] = Path("phpfossil-results.json"),
@@ -237,6 +241,7 @@ def scan(
             per_domain_limit=per_domain_limit,
             timeout=timeout,
             use_nuclei=nuclei,
+            nuclei_templates_dir=nuclei_templates,
             use_ollama=ollama,
             use_community_fingerprints=community,
             verbose=verbose,
@@ -247,19 +252,20 @@ def scan(
         raise typer.Exit(1) from exc
 
     logger.info(
-        "Scanning %d target(s) (concurrency=%s, per-domain=%s, nuclei=%s, ollama=%s, community=%s)",
+        "Scanning %d target(s) (concurrency=%s, per-domain=%s, nuclei=%s, nuclei_templates_dir=%s, ollama=%s, community=%s)",
         len(targets),
         config.max_concurrency,
         config.per_domain_limit,
         config.use_nuclei,
+        config.nuclei_templates_dir,
         config.use_ollama,
         config.use_community_fingerprints,
     )
     console.print(
         f"[bold blue]Scanning {len(targets)} target(s) "
         f"(concurrency={config.max_concurrency}, per-domain={config.per_domain_limit}, "
-        f"nuclei={config.use_nuclei}, ollama={config.use_ollama}, "
-        f"community={config.use_community_fingerprints})...[/]"
+        f"nuclei={config.use_nuclei}, nuclei-templates={config.nuclei_templates_dir or 'default'}, "
+        f"ollama={config.use_ollama}, community={config.use_community_fingerprints})...[/]"
     )
     # Run the async scanner (now accepts ConfigSettings directly)
     results = asyncio.run(scan_targets(targets, config=config))

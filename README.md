@@ -552,7 +552,7 @@ Tests cover `detect_php_version` accuracy, `scan_targets` with `pytest-httpx` mo
 - [x] Add Symfony/CodeIgniter fingerprint functions to fingerprinter.py and extend detect_cms_version
 - [x] Implement per-domain rate limiting using asyncio.Semaphore in scanner.py
 - [x] Add test_cli.py with typer.CliRunner covering all commands and config parsing
-- [ ] Support custom Nuclei template directory via ConfigSettings and --nuclei-templates CLI flag
+- [x] Support custom Nuclei template directory via ConfigSettings and --nuclei-templates CLI flag
 - [ ] Add --risk-threshold filter to scan/report CLI commands and update models.py validator
 - [ ] Extend embedded VulnDB with 25 Laravel/Symfony CVEs plus framework-specific severity rules
 - [ ] Add response caching layer (TTL dict) in scanner.py for repeated target scans

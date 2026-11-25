@@ -1,187 +1,177 @@
-"""Async scanner for PHP Fossil.
+"""Core async scanning engine for PHP Fossil.
 
-Handles concurrent scanning with global and per-domain rate limiting,
-rotating User-Agents, round-robin proxy support via per-request proxy=,
-fingerprinting, vuln lookup, schema extraction, optional Nuclei and Ollama,
-and live callback support for TUI. Compatible with pytest-httpx mocks.
+Handles concurrent HTTP requests with proxy rotation, rotating User-Agents,
+per-domain rate limiting via Semaphores, fingerprinting, vuln lookup,
+schema extraction, optional Nuclei and Ollama post-processing.
+Uses the validated ConfigSettings for all options including the new
+nuclei_templates_dir.
 """
 
 import asyncio
-from collections import defaultdict
-from itertools import cycle
-from typing import Any, Callable, Dict, List, Optional, Union
-from urllib.parse import urlparse
+import random
+from collections.abc import Callable
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
-from .models import (
-    ConfigSettings,
-    DEFAULT_USER_AGENTS,
-    ExposedFile,
-    ScanResult,
-)
 from .fingerprinter import detect_php_version, detect_with_community_rules
-from .vulndb import get_vulns_for_version
-from .schema import locate_sql_urls, parse_sql_dump
+from .models import ConfigSettings, ExposedFile, ScanResult
 from .nuclei import validate_with_nuclei
 from .ollama import generate_summary, is_ollama_available
+from .schema import locate_sql_urls, parse_sql_dump
+from .vulndb import get_vulns_for_version
+
+
+class AsyncScanner:
+    """Manages async scanning with rate limits and config."""
+
+    def __init__(self, config: ConfigSettings):
+        self.config = config
+        self.global_semaphore = asyncio.Semaphore(config.max_concurrency)
+        self.domain_semaphores: Dict[str, asyncio.Semaphore] = {}
+        self.ua_pool = config.user_agents or []
+        self.proxy_cycle = 0
+
+    def _next_user_agent(self) -> str:
+        if not self.ua_pool:
+            return "Mozilla/5.0 (compatible; PHPFossil/0.1)"
+        return random.choice(self.ua_pool)
+
+    def _next_proxy(self) -> Optional[str]:
+        if not self.config.proxies:
+            return None
+        proxy = self.config.proxies[self.proxy_cycle % len(self.config.proxies)]
+        self.proxy_cycle = (self.proxy_cycle + 1) % len(self.config.proxies)
+        return proxy
+
+    async def _fetch_with_retry(
+        self, client: httpx.AsyncClient, url: str, retries: int = 2
+    ) -> Optional[httpx.Response]:
+        for attempt in range(retries + 1):
+            try:
+                headers = {"User-Agent": self._next_user_agent()}
+                proxy = self._next_proxy()
+                resp = await client.get(
+                    url,
+                    headers=headers,
+                    proxy=proxy,
+                    timeout=self.config.timeout,
+                    follow_redirects=True,
+                )
+                resp.raise_for_status()
+                return resp
+            except Exception:
+                if attempt == retries:
+                    return None
+                await asyncio.sleep(0.5 * (attempt + 1))
+        return None
+
+    async def _probe_target(
+        self,
+        url: str,
+        client: httpx.AsyncClient,
+        callback: Optional[Callable[[ScanResult], None]] = None,
+    ) -> ScanResult:
+        """Probe single target with all detection vectors."""
+        result = ScanResult(url=url)
+        # get domain for per-domain limit
+        try:
+            domain = httpx.URL(url).host or "unknown"
+        except Exception:
+            domain = "unknown"
+        if domain not in self.domain_semaphores:
+            self.domain_semaphores[domain] = asyncio.Semaphore(
+                self.config.per_domain_limit
+            )
+        async with self.global_semaphore, self.domain_semaphores[domain]:
+            resp = await self._fetch_with_retry(client, url)
+            if resp is None:
+                if callback:
+                    callback(result)
+                return result
+
+            result.detected_from = ["body", "headers"]
+            version = detect_php_version(
+                dict(resp.headers), resp.text, None, None
+            )
+            if not version and self.config.use_community_fingerprints:
+                version = detect_with_community_rules(resp.text)
+            result.php_version = version or "unknown"
+            if version and version != "unknown":
+                result.vulns = get_vulns_for_version(version)
+
+            # Look for exposed SQL dumps
+            sql_urls = locate_sql_urls(resp.text, base_url=url)
+            for s_url in sql_urls[:3]:
+                sql_resp = await self._fetch_with_retry(client, s_url)
+                if sql_resp and sql_resp.status_code < 400:
+                    snippet = sql_resp.text[:500] if sql_resp.text else ""
+                    result.exposed_files.append(
+                        ExposedFile(
+                            url=s_url,
+                            content_type=sql_resp.headers.get("content-type", "text/plain"),
+                            snippet=snippet,
+                        )
+                    )
+                    if not result.db_schema:
+                        result.db_schema = parse_sql_dump(sql_resp.text)
+
+            # Nuclei validation - now passes full config including nuclei_templates_dir
+            if self.config.use_nuclei:
+                result.nuclei_findings.extend(
+                    validate_with_nuclei(url, self.config)
+                )
+
+            # Ollama summary
+            if (
+                self.config.use_ollama
+                and is_ollama_available()
+                and result.is_vulnerable()
+            ):
+                try:
+                    result.llm_summary = generate_summary(
+                        [result], model=self.config.ollama_model
+                    )
+                except Exception:
+                    result.llm_summary = "Ollama summarization unavailable."
+
+            if callback is not None:
+                callback(result)
+            return result
+
+    async def scan(
+        self,
+        targets: List[str],
+        callback: Optional[Callable[[ScanResult], None]] = None,
+    ) -> List[ScanResult]:
+        limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
+        timeout = httpx.Timeout(self.config.timeout, connect=10.0)
+        async with httpx.AsyncClient(
+            limits=limits, timeout=timeout, follow_redirects=True
+        ) as client:
+            tasks = [
+                asyncio.create_task(self._probe_target(t, client, callback))
+                for t in targets
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        final_results: List[ScanResult] = []
+        for res in results:
+            if isinstance(res, ScanResult):
+                final_results.append(res)
+            # ignore exceptions for robustness
+        return final_results
 
 
 async def scan_targets(
     targets: List[str],
-    config: Optional[Union[ConfigSettings, Dict[str, Any]]] = None,
-    callback: Optional[Callable[[ScanResult], Any]] = None,
+    config: Union[ConfigSettings, Dict[str, Any], None] = None,
+    callback: Optional[Callable[[ScanResult], None]] = None,
 ) -> List[ScanResult]:
-    """Scan targets for legacy PHP versions, vulns, exposed files and schemas.
-
-    Accepts ConfigSettings instance or dict (converted internally).
-    Proxies are rotated round-robin using the per-request 'proxy' argument
-    (avoids TypeError on AsyncClient.__init__ with list-valued proxies=).
-    User-Agents rotate on every request. Per-domain Semaphore prevents
-    overwhelming individual hosts.
-    """
-    if config is None:
-        cfg = ConfigSettings()
-    elif isinstance(config, dict):
-        cfg = ConfigSettings(**config)
+    """Public async scan entrypoint. Accepts ConfigSettings, dict or None."""
+    if isinstance(config, dict) or config is None:
+        config_obj = ConfigSettings.model_validate(config or {})
     else:
-        cfg = config
-
-    max_concurrency = min(cfg.max_concurrency, 50)
-    timeout = httpx.Timeout(cfg.timeout)
-    limits = httpx.Limits(
-        max_connections=max_concurrency, max_keepalive_connections=max_concurrency
-    )
-
-    user_agents = cfg.user_agents if cfg.user_agents else DEFAULT_USER_AGENTS
-    ua_cycle = cycle(user_agents)
-    proxy_cycle = cycle(cfg.proxies) if cfg.proxies else None
-
-    domain_semaphores: Dict[str, asyncio.Semaphore] = defaultdict(
-        lambda: asyncio.Semaphore(cfg.per_domain_limit)
-    )
-    global_semaphore = asyncio.Semaphore(max_concurrency)
-
-    results: List[ScanResult] = []
-
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        limits=limits,
-        follow_redirects=True,
-        # proxies= is deliberately omitted (list not accepted by all mock versions;
-        # rotation is performed per-request via the proxy= argument below)
-    ) as client:
-        async def _probe_target(url: str) -> ScanResult:
-            parsed = urlparse(url)
-            domain = parsed.netloc or parsed.hostname or url
-            async with global_semaphore, domain_semaphores[domain]:
-                try:
-                    headers = {"User-Agent": next(ua_cycle)}
-                    proxy = next(proxy_cycle) if proxy_cycle is not None else None
-
-                    response = await client.get(
-                        url, headers=headers, proxy=proxy
-                    )
-                    response.raise_for_status()
-                    body = response.text
-                    headers_dict = {k.lower(): v for k, v in response.headers.items()}
-
-                    php_version = detect_php_version(
-                        headers=headers_dict, body=body
-                    )
-                    detected_from: List[str] = []
-                    if php_version:
-                        detected_from.append("headers")
-
-                    if not php_version and cfg.use_community_fingerprints:
-                        php_version = detect_with_community_rules(body)
-                        if php_version:
-                            detected_from.append("community")
-
-                    if not php_version:
-                        php_version = detect_php_version(body=body)
-                        if php_version:
-                            detected_from.append("body")
-
-                    vulns = (
-                        get_vulns_for_version(php_version) if php_version else []
-                    )
-
-                    exposed_files: List[ExposedFile] = []
-                    sql_urls = locate_sql_urls(body, base_url=url)
-                    for sql_url in sql_urls[:2]:  # limit extra requests in tests
-                        try:
-                            s_proxy = (
-                                next(proxy_cycle) if proxy_cycle is not None else None
-                            )
-                            s_headers = {"User-Agent": next(ua_cycle)}
-                            s_response = await client.get(
-                                sql_url, headers=s_headers, proxy=s_proxy
-                            )
-                            if s_response.status_code == 200:
-                                schema = parse_sql_dump(s_response.text)
-                                exposed_files.append(
-                                    ExposedFile(
-                                        url=sql_url,
-                                        content_type=s_response.headers.get(
-                                            "content-type", "text/plain"
-                                        ),
-                                        size=len(s_response.content),
-                                        snippet=(
-                                            s_response.text[:250]
-                                            if len(s_response.text) > 250
-                                            else s_response.text
-                                        ),
-                                    )
-                                )
-                        except Exception:
-                            continue
-
-                    nuclei_findings = []
-                    if cfg.use_nuclei and php_version:
-                        try:
-                            nuclei_findings = validate_with_nuclei(url, php_version)
-                        except Exception:
-                            pass
-
-                    llm_summary = None
-                    if cfg.use_ollama:
-                        try:
-                            if is_ollama_available():
-                                llm_summary = generate_summary(
-                                    [ScanResult(url=url, php_version=php_version, vulns=vulns)]
-                                )
-                        except Exception:
-                            llm_summary = None
-
-                    result = ScanResult(
-                        url=url,
-                        php_version=php_version,
-                        detected_from=detected_from,
-                        vulns=vulns,
-                        exposed_files=exposed_files,
-                        nuclei_findings=nuclei_findings,
-                        llm_summary=llm_summary,
-                    )
-
-                    if callback is not None:
-                        callback(result)
-                    return result
-
-                except httpx.HTTPStatusError:
-                    result = ScanResult(url=url)
-                    if callback is not None:
-                        callback(result)
-                    return result
-                except Exception:
-                    result = ScanResult(url=url)
-                    if callback is not None:
-                        callback(result)
-                    return result
-
-        tasks = [_probe_target(t) for t in targets]
-        for coro in asyncio.as_completed(tasks):
-            result = await coro
-            results.append(result)
-
-    return results
+        config_obj = config
+    scanner = AsyncScanner(config_obj)
+    return await scanner.scan(targets, callback)

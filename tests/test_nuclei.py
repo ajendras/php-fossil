@@ -1,60 +1,91 @@
 """Tests for Nuclei integration."""
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 
 from phpfossil.nuclei import validate_with_nuclei, NucleiValidator
-from phpfossil.models import NucleiFinding
+from phpfossil.models import ConfigSettings, NucleiFinding
+
+
+def test_validate_with_nuclei_disabled():
+    config = ConfigSettings(use_nuclei=False)
+    findings = validate_with_nuclei("https://example.com", config)
+    assert findings == []
+
+
+@patch("phpfossil.nuclei.subprocess.run")
+def test_validate_with_nuclei_custom_templates(mock_run):
+    mock_result = MagicMock()
+    mock_result.stdout = (
+        json.dumps(
+            {
+                "template-id": "php/version-detect",
+                "info": {
+                    "name": "PHP Version Disclosure",
+                    "severity": "info",
+                    "description": "Detects PHP version",
+                },
+            }
+        )
+        + "\n"
+    )
+    mock_run.return_value = mock_result
+
+    config = ConfigSettings(
+        use_nuclei=True,
+        nuclei_templates_dir="/custom/nuclei/templates",
+        timeout=5,
+    )
+    findings = validate_with_nuclei("http://test.com", config)
+    assert len(findings) == 1
+    assert findings[0].name == "PHP Version Disclosure"
+    assert findings[0].severity == "info"
+    # Verify command included custom template directory
+    args, _ = mock_run.call_args
+    cmd = args[0]
+    assert any(part == "-t" for part in cmd)
+    assert any("custom/nuclei/templates" in str(part) for part in cmd)
+
+
+@patch("phpfossil.nuclei.subprocess.run")
+def test_validate_with_nuclei_default_templates(mock_run):
+    mock_result = MagicMock()
+    mock_result.stdout = ""
+    mock_run.return_value = mock_result
+
+    config = ConfigSettings(use_nuclei=True, nuclei_templates_dir=None)
+    findings = validate_with_nuclei("http://test.com", config)
+    assert findings == []
+    # No -t flag when no custom dir
+    args, _ = mock_run.call_args
+    cmd = args[0]
+    assert "-t" not in cmd
 
 
 def test_nuclei_finding_model():
-    # Supply all required fields so validation succeeds
     data = {
-        "template": "test-template",
-        "name": "PHP Version Disclosure",
-        "severity": "info",
-        "matched-at": "http://example.com/index.php",
+        "template-id": "test-template",
+        "info": {"name": "Test Template", "severity": "high", "description": "Test"},
     }
     finding = NucleiFinding.model_validate(data)
     assert finding.template == "test-template"
-    assert finding.name == "PHP Version Disclosure"
-    assert finding.severity == "info"
+    assert finding.name == "Test Template"
+    assert finding.severity == "high"
 
 
-def test_validate_with_nuclei():
-    # Use templates_dir to match the test that previously failed
-    mock_output = json.dumps({
-        "template-id": "test-template",
-        "info": {
-            "name": "Test Finding",
-            "severity": "high",
-            "description": "Test description"
-        }
-    })
-    with patch("phpfossil.nuclei.subprocess.run") as mock_run:
-        mock_completed = MagicMock()
-        mock_completed.stdout = mock_output
-        mock_run.return_value = mock_completed
-        findings = validate_with_nuclei(
-            targets=["http://example.com"],
-            templates_dir="php",
-            timeout=5,
-        )
-        # The mock produces at least the parsed finding
-        assert len(findings) >= 0
+def test_validate_with_nuclei_no_binary():
+    config = ConfigSettings(use_nuclei=True, nuclei_templates_dir=None)
+    with patch("phpfossil.nuclei.subprocess.run", side_effect=FileNotFoundError):
+        findings = validate_with_nuclei("http://example.com", config)
+        assert findings == []
 
 
 def test_nuclei_validator_class():
-    validator = NucleiValidator(templates=["php/cve"], templates_dir=None)
-    # Mock to avoid real subprocess
-    with patch("phpfossil.nuclei.validate_with_nuclei", return_value=[]):
-        findings = validator.validate(["http://example.com"])
-        assert isinstance(findings, list)
-
-
-def test_nuclei_is_available():
-    with patch("phpfossil.nuclei.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock()
-        assert NucleiValidator.is_available() is True
+    config = ConfigSettings(use_nuclei=True)
+    validator = NucleiValidator(config)
+    with patch("phpfossil.nuclei.validate_with_nuclei") as mock_validate:
+        mock_validate.return_value = []
+        assert validator.scan("http://test.com") == []
+        mock_validate.assert_called_once_with("http://test.com", config)
