@@ -244,7 +244,7 @@ def scan(
     except Exception as exc:  # pydantic.ValidationError caught here
         logger.error("Config validation failed: %s", exc)
         console.print(f"[red]Config validation error:[/] {escape(str(exc))}")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(1) from exc
 
     logger.info(
         "Scanning %d target(s) (concurrency=%s, per-domain=%s, nuclei=%s, ollama=%s, community=%s)",
