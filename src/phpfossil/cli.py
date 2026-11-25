@@ -203,7 +203,7 @@ def scan(
         Optional[Path],
         typer.Option("-f", "--file", exists=True, dir_okay=False, help="File with one URL per line"),
     ] = None,
-    concurrency: Annotated[int, typer.Option("--concurrency", "-c", min=5, max=100)] = 20,
+    concurrency: Annotated[int, typer.Option("--concurrency", "-c", min=5, max=50)] = 20,
     per_domain_limit: Annotated[int, typer.Option("--per-domain-limit", "-d", min=1, max=20)] = 5,
     timeout: Annotated[int, typer.Option("--timeout", min=1, max=60)] = 12,
     nuclei: Annotated[bool, typer.Option("--nuclei", help="Enable Nuclei for deeper exploit validation")] = False,
@@ -244,7 +244,7 @@ def scan(
     except Exception as exc:  # pydantic.ValidationError caught here
         logger.error("Config validation failed: %s", exc)
         console.print(f"[red]Config validation error:[/] {escape(str(exc))}")
-        raise typer.Exit(1) from exc
+        raise typer.Exit(2) from exc
 
     logger.info(
         "Scanning %d target(s) (concurrency=%s, per-domain=%s, nuclei=%s, ollama=%s, community=%s)",

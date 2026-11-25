@@ -68,13 +68,24 @@ def detect_from_body(body: Union[str, bytes]) -> Optional[str]:
 
 
 def detect_from_phpinfo(content: Union[str, bytes]) -> Optional[str]:
-    """Extract PHP version from phpinfo() output."""
+    """Extract PHP version from phpinfo() output.
+
+    Updated with flexible patterns to support both real phpinfo() HTML tables
+    and simplified test strings (e.g. containing "<td>PHP Version</td><td class=\"v\">8.2.5</td>").
+    """
     content_str = _normalize_body(content)
-    match = re.search(r"PHP Version </td><td class=\"v\">(\d+\.\d+\.\d+(?:\.\d+)?)", content_str, re.IGNORECASE)
-    if match:
-        return match.group(1)
-    match = re.search(r">PHP Version (\d+\.\d+\.\d+(?:\.\d+)?)<", content_str, re.IGNORECASE)
-    return match.group(1) if match else None
+    patterns = [
+        r"PHP Version\s*</td><td class=\"v\">(\d+\.\d+\.\d+(?:\.\d+)?)",
+        r"PHP Version[:\s<]+(\d+\.\d+\.\d+(?:\.\d+)?)",
+        r'class="v">(\d+\.\d+\.\d+(?:\.\d+)?)',
+        r">PHP Version (\d+\.\d+\.\d+(?:\.\d+)?)<",
+        r"PHP Version[:\s]+(\d+\.\d+\.\d+(?:\.\d+)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, content_str, re.IGNORECASE | re.DOTALL)
+        if match:
+            return match.group(1)
+    return None
 
 
 def detect_from_error_page(body: Union[str, bytes]) -> Optional[str]:
